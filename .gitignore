@@ -3,6 +3,9 @@
 # Deploy from config.php.example instead.
 config.php
 
+# ===== Tokens / credentials =====
+.sonar-token
+
 # ===== Sensitive captured traffic (HAR recordings) =====
 # These contain live session cookies, tokens, and URLs. Do not commit.
 *.har
