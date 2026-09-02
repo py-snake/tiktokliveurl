@@ -1,0 +1,26 @@
+<?php
+
+// Copy this file to config.php and set your own secret token.
+// config.php is gitignored, so never commit your real token.
+
+return [
+    // Master token - change this to your own secret token
+    'master_token' => 'CHANGE_ME_TO_A_RANDOM_SECRET',
+
+    // TikTok API settings
+    'tiktok' => [
+        'webcast_url' => 'https://webcast.tiktok.com',
+        'web_url' => 'https://www.tiktok.com',
+        'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36',
+        'timeout' => 10,
+    ],
+
+    // Proxy settings (leave empty for no proxy)
+    'proxy' => '', // e.g., 'http://user:pass@host:port'
+
+    // CORS settings
+    'cors' => [
+        'enabled' => false,
+        'origins' => ['*'],
+    ],
+];

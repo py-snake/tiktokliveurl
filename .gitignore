@@ -1,0 +1,26 @@
+# ===== Secrets & local configuration =====
+# config.php holds the master token + API credentials. Never commit it.
+# Deploy from config.php.example instead.
+config.php
+
+# ===== Sensitive captured traffic (HAR recordings) =====
+# These contain live session cookies, tokens, and URLs. Do not commit.
+*.har
+
+# ===== Generated test artifacts & working dirs =====
+# Instrumented copies, mock servers, coverage logs, server logs.
+tests/.work/
+tests/results/
+
+# ===== SonarQube cache/scanner output =====
+.sonar/
+.scannerwork/
+sonar-scanner-*.properties
+
+# ===== OS / editor cruft =====
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
