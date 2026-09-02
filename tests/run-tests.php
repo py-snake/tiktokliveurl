@@ -38,7 +38,25 @@ require $repo . '/tests/lib/instrument.php';
 TiktokCoverage\Cov::install();
 
 $covPath = $repo . '/tests/lib/cov.php';
-$masterToken = 'e57cdf13-4277-4706-8e88-14a3b232f70e'; // must match tests/.work/webroot/config.php below
+$masterToken = (function () use ($repo): string {
+    $cfg = @include $repo . '/config.php';
+    if (is_array($cfg) && !empty($cfg['master_token']) && is_string($cfg['master_token'])) {
+        return $cfg['master_token'];
+    }
+    $env = getenv('TT_MASTER_TOKEN');
+    if ($env !== false && $env !== '') {
+        return $env;
+    }
+    $local = $repo . '/.test-token';
+    if (is_readable($local)) {
+        $t = trim((string) file_get_contents($local));
+        if ($t !== '') {
+            return $t;
+        }
+    }
+    fwrite(STDERR, "Error: no master token. Set TT_MASTER_TOKEN, create .test-token, or populate config.php\n");
+    exit(1);
+})();
 
 /** Build an instrumented copy of a source file (string) at $outPath. */
 function instrumentSource(string $srcContent, string $realLabel, string $outPath, string $logPath, string $covPath): void
@@ -83,7 +101,7 @@ $webBase = "http://127.0.0.1:$webPort";
 $cfg = file_get_contents($repo . '/config.php');
 $cfg = str_replace("'webcast_url' => 'https://webcast.tiktok.com'", "'webcast_url' => '$mockBase'", $cfg);
 $cfg = str_replace("'web_url' => 'https://www.tiktok.com'", "'web_url' => '$mockBase'", $cfg);
-$cfg = str_replace("'master_token' => 'e57cdf13-4277-4706-8e88-14a3b232f70e'", "'master_token' => '$masterToken'", $cfg);
+$cfg = preg_replace("#'master_token' => '\K[^']*'#", $masterToken . "'", $cfg, 1);
 $cfg = str_replace("'enabled' => false,", "'enabled' => true,", $cfg);
 $cfg = str_replace("'proxy' => '', // e.g., 'http://user:pass@host:port'", "'proxy' => '127.0.0.1:$cdnPort',", $cfg);
 instrumentSource($cfg, $repo . '/config.php', $work . '/webroot/config.php', $log, $covPath);
