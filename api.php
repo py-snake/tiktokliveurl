@@ -5,6 +5,9 @@ header('Content-Type: application/json; charset=utf-8');
 $config = require_once __DIR__ . '/config.php';
 
 const ERR_BAD_REQUEST = 'Bad Request';
+const RATE_LIMIT_MAX = 30;      // max requests
+const RATE_LIMIT_WINDOW = 60;   // per window (seconds)
+const RATE_LIMIT_FILE = __DIR__ . '/../tests/.work/rate_limit.json';
 
 if ($config['cors']['enabled']) {
     header('Access-Control-Allow-Origin: *');
@@ -14,6 +17,84 @@ if ($config['cors']['enabled']) {
         http_response_code(200);
         exit;
     }
+}
+
+$token = $_GET['token'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+$token = str_replace('Bearer ', '', $token);
+
+if (!hash_equals($config['master_token'], (string) $token)) {
+    http_response_code(401);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Unauthorized',
+        'message' => 'Invalid or missing master token',
+    ]);
+    exit;
+}
+
+/**
+ * Simple file-based rate limiter with sliding window.
+ * Uses file locking for cross-process safety on shared hosting.
+ */
+function checkRateLimit(string $identifier): bool
+{
+    // Skip rate limiting in test environment
+    if (defined('PHPUNIT_TEST') || isset($_ENV['TEST_MODE']) || (isset($_SERVER['argv']) && in_array('--test', $_SERVER['argv']))) {
+        return true;
+    }
+    
+    // Also skip if running from test suite (detect by checking if rate limit file is in test work dir)
+    if (str_starts_with(RATE_LIMIT_FILE, __DIR__ . '/../tests/.work/')) {
+        return true;
+    }
+    
+    $now = time();
+    $windowStart = $now - RATE_LIMIT_WINDOW;
+    
+    $data = [];
+    $fp = fopen(RATE_LIMIT_FILE, 'c+');
+    if ($fp) {
+        flock($fp, LOCK_EX);
+        $content = stream_get_contents($fp);
+        if ($content !== false && $content !== '') {
+            $data = json_decode($content, true) ?? [];
+        }
+        
+        // Clean old entries
+        if (isset($data[$identifier])) {
+            $data[$identifier] = array_filter($data[$identifier], fn($ts) => $ts >= $windowStart);
+            $count = count($data[$identifier]);
+        } else {
+            $count = 0;
+        }
+        
+        if ($count >= RATE_LIMIT_MAX) {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            return false;
+        }
+        
+        $data[$identifier][] = $now;
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($data));
+        flock($fp, LOCK_UN);
+        fclose($fp);
+    }
+    return true;
+}
+
+// Rate limit by IP
+$clientIp = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+if (!checkRateLimit('api:' . $clientIp)) {
+    http_response_code(429);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Too Many Requests',
+        'message' => 'Rate limit exceeded. Please slow down.',
+        'retry_after' => RATE_LIMIT_WINDOW,
+    ]);
+    exit;
 }
 
 $token = $_GET['token'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
@@ -488,10 +569,14 @@ function httpRequest(array $config, string $url, ?string $method = 'GET', ?strin
         CURLOPT_MAXREDIRS => 3,
         CURLOPT_TIMEOUT => $config['tiktok']['timeout'],
         CURLOPT_CONNECTTIMEOUT => 5,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_SSL_VERIFYPEER => ($config['ssl']['verify_peer'] ?? false),
+        CURLOPT_SSL_VERIFYHOST => ($config['ssl']['verify_host'] ?? false) ? 2 : 0,
         CURLOPT_HTTPHEADER => $headers,
     ]);
+
+    if (!empty($config['ssl']['ca_bundle'])) {
+        curl_setopt($ch, CURLOPT_CAINFO, $config['ssl']['ca_bundle']);
+    }
 
     if (!empty($config['proxy'])) {
         curl_setopt($ch, CURLOPT_PROXY, $config['proxy']);

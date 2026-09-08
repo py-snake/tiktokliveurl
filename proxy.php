@@ -25,22 +25,37 @@ function tiktokRequestHeaders(string $userAgent): array
         'Accept: */*',
         'Accept-Language: en-US,en;q=0.9',
         'Referer: https://www.tiktok.com/',
-        'Origin: https://www.tiktok.com',
+        'Origin: https://www.tiktok.com/',
     ];
 }
 
-const CORS_HEADER = 'Access-Control-Allow-Origin: *';
-
-$url = $_GET['url'] ?? '';
-$url = trim($url);
-
-if (empty($url)) {
-    http_response_code(400);
-    echo 'Missing url parameter';
-    exit;
+function sendCorsHeaders(array $config): void
+{
+    if (!($config['cors']['enabled'] ?? false)) {
+        return;
+    }
+    $origins = $config['cors']['origins'] ?? ['*'];
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    $allowOrigin = in_array('*', $origins, true) ? '*' : (in_array($origin, $origins, true) ? $origin : '');
+    if ($allowOrigin !== '') {
+        header('Access-Control-Allow-Origin: ' . $allowOrigin);
+    }
+    if (($config['cors']['allow_credentials'] ?? false)) {
+        header('Access-Control-Allow-Credentials: true');
+    }
+    header('Access-Control-Allow-Methods: GET, HEAD, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization');
+    header('Access-Control-Max-Age: 86400');
 }
 
-$url = urldecode($url);
+function sendError(int $code, string $message, array $config): void
+{
+    http_response_code($code);
+    header('Content-Type: text/plain; charset=utf-8');
+    sendCorsHeaders($config);
+    echo $message;
+    exit;
+}
 
 const ALLOWED_CDN_HOSTS = [
     'tiktokcdn.com',
@@ -51,11 +66,16 @@ const ALLOWED_CDN_HOSTS = [
     'muscdn.com',
 ];
 
+$url = $_GET['url'] ?? '';
+$url = trim($url);
+
+if (empty($url)) {
+    sendError(400, 'Missing url parameter', $config);
+}
+
 $parsed = parse_url($url);
 if (!$parsed || !isset($parsed['host'])) {
-    http_response_code(400);
-    echo 'Invalid URL';
-    exit;
+    sendError(400, 'Invalid URL', $config);
 }
 
 $host = $parsed['host'];
@@ -96,6 +116,13 @@ function cdnRedirectAllowed(string $locationHeader): bool
     return false;
 }
 
+// CORS preflight
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
+    sendCorsHeaders($config);
+    http_response_code(204);
+    exit;
+}
+
 // Lightweight availability check (used by the UI to color the Play button).
 // This deliberately issues a real GET, not a HEAD/CURLOPT_NOBODY request:
 // Akamai's block on TikTok's HLS edges only triggers on GET (it fetches from
@@ -116,8 +143,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
     $redirectBlocked = false;
 
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_TIMEOUT, 12);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 6);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_NOBODY, true); // proper HEAD request
     curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $headerLine) use (&$sawLocation, &$redirectBlocked) {
         $trimmed = rtrim($headerLine, "\r\n");
         if ($trimmed === '' && !$sawLocation) {
@@ -140,20 +168,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
         CURLOPT_MAXREDIRS => 5,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_SSL_VERIFYPEER => ($config['ssl']['verify_peer'] ?? false),
+        CURLOPT_SSL_VERIFYHOST => ($config['ssl']['verify_host'] ?? false) ? 2 : 0,
         CURLOPT_HTTPHEADER => tiktokRequestHeaders($config['tiktok']['user_agent']),
-        CURLOPT_WRITEFUNCTION => function (): int {
-            return 0; // safety net in case the header-based abort above doesn't fire
-        },
     ]);
+
+    if (!empty($config['ssl']['ca_bundle'])) {
+        curl_setopt($ch, CURLOPT_CAINFO, $config['ssl']['ca_bundle']);
+    }
     if (!empty($config['proxy'])) {
         curl_setopt($ch, CURLOPT_PROXY, $config['proxy']);
     }
     curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    
-    header(CORS_HEADER);
+
+    sendCorsHeaders($config);
     http_response_code($redirectBlocked || !$httpCode ? 502 : $httpCode);
     exit;
 }
@@ -180,11 +209,15 @@ if ($isHlsGuess) {
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_SSL_VERIFYPEER => ($config['ssl']['verify_peer'] ?? false),
+        CURLOPT_SSL_VERIFYHOST => ($config['ssl']['verify_host'] ?? false) ? 2 : 0,
         CURLOPT_ENCODING => 'gzip, deflate',
         CURLOPT_HTTPHEADER => tiktokRequestHeaders($config['tiktok']['user_agent']),
     ]);
+
+    if (!empty($config['ssl']['ca_bundle'])) {
+        curl_setopt($ch, CURLOPT_CAINFO, $config['ssl']['ca_bundle']);
+    }
 
     if (!empty($config['proxy'])) {
         curl_setopt($ch, CURLOPT_PROXY, $config['proxy']);
@@ -195,6 +228,7 @@ if ($isHlsGuess) {
     
     if ($response === false || $httpCode >= 400) {
         http_response_code(502);
+        sendCorsHeaders($config);
         echo "Upstream error: HTTP $httpCode";
         exit;
     }
@@ -213,7 +247,7 @@ if ($isHlsGuess) {
         $baseUrl .= '/';
     }
 
-    $body = preg_replace_callback('/^(?!#)(.+\.ts.*)$/m', function ($m) use ($parsed, $baseUrl, $token) {
+    $body = preg_replace_callback('/^(?!#)(.+\.(?:ts|m4s|mp4|m4v|webm).*)$/m', function ($m) use ($parsed, $baseUrl, $token) {
         $segment = trim($m[1]);
         if (preg_match('#^https?://#i', $segment)) {
             $fullUrl = $segment;
@@ -224,7 +258,7 @@ if ($isHlsGuess) {
     }, $body);
 
     header('Content-Type: application/vnd.apple.mpegurl');
-    header(CORS_HEADER);
+    sendCorsHeaders($config);
     header('Cache-Control: no-cache');
     echo $body;
     exit;
@@ -265,8 +299,8 @@ curl_setopt_array($ch, [
     CURLOPT_NOSIGNAL => true,
     CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
     CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-    CURLOPT_SSL_VERIFYPEER => false,
-    CURLOPT_SSL_VERIFYHOST => false,
+    CURLOPT_SSL_VERIFYPEER => ($config['ssl']['verify_peer'] ?? false),
+    CURLOPT_SSL_VERIFYHOST => ($config['ssl']['verify_host'] ?? false) ? 2 : 0,
     CURLOPT_HTTPHEADER => tiktokRequestHeaders($config['tiktok']['user_agent']),
 ]);
 curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $headerLine) use (&$statusCode, &$upstreamContentType) {
@@ -283,14 +317,14 @@ curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $headerLine) use (&$stat
     }
     return strlen($headerLine);
 });
-curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $chunk) use (&$statusCode, &$upstreamContentType, &$headersSent) {
+curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $chunk) use (&$statusCode, &$upstreamContentType, &$headersSent, $config) {
     if (connection_aborted()) {
         return 0; // client disconnected — abort the transfer and free the worker
     }
     if (!$headersSent) {
         http_response_code($statusCode >= 400 ? 502 : $statusCode);
         header('Content-Type: ' . ($upstreamContentType ?: 'video/x-flv'));
-        header(CORS_HEADER);
+        sendCorsHeaders($config);
         header('Cache-Control: no-cache');
         $headersSent = true;
     }
@@ -302,6 +336,10 @@ curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $chunk) use (&$statusCode
     return strlen($chunk);
 });
 
+if (!empty($config['ssl']['ca_bundle'])) {
+    curl_setopt($ch, CURLOPT_CAINFO, $config['ssl']['ca_bundle']);
+}
+
 if (!empty($config['proxy'])) {
     curl_setopt($ch, CURLOPT_PROXY, $config['proxy']);
 }
@@ -311,5 +349,6 @@ $curlError = curl_error($ch);
 
 if (!$headersSent) {
     http_response_code(502);
+    sendCorsHeaders($config);
     echo 'Upstream error' . ($curlError ? ": $curlError" : '');
 }

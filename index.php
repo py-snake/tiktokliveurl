@@ -610,14 +610,24 @@ if ($authed) {
     <script src="vendor/flv.min.js"></script>
     <script>
     const API_BASE = 'api.php';
-    const TOKEN = '<?= $token ?>';
+    const TOKEN = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
     const REFRESH_INTERVAL = 60000;
 
-    let profiles = JSON.parse(localStorage.getItem('tt_profiles') || '{}');
+    let profiles = (() => {
+        try {
+            const raw = localStorage.getItem('tt_profiles');
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            console.warn('Corrupted localStorage tt_profiles, resetting:', e);
+            localStorage.removeItem('tt_profiles');
+            return {};
+        }
+    })();
     let refreshTimer = null;
     let bootRefreshed = false;
     let notifyEnabled = localStorage.getItem('tt_notify') === '1';
     let audioCtx = null;
+    let isRefreshing = false;  // guard against refreshAll re-entry
 
     document.addEventListener('DOMContentLoaded', () => {
         renderCards();
@@ -632,6 +642,19 @@ if ($authed) {
         if (u) {
             document.getElementById('username-input').value = u;
             checkUser();
+        }
+    });
+
+    // Cross-tab sync: when another tab updates localStorage, reload profiles
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'tt_profiles') {
+            try {
+                profiles = e.newValue ? JSON.parse(e.newValue) : {};
+            } catch {
+                profiles = {};
+            }
+            renderCards();
+            updateCounts();
         }
     });
 
@@ -711,7 +734,7 @@ if ($authed) {
                     notifyLive(username, data.data.room || null);
                 }
                 saveProfiles();
-                renderCards();
+                updateCard(username);  // update only this card instead of full rebuild
                 updateCounts();
             }
         } catch (err) {
@@ -720,30 +743,31 @@ if ($authed) {
     }
 
     async function refreshAll() {
-        const usernames = Object.keys(profiles);
-        if (usernames.length === 0) return;
-        document.getElementById('refresh-all-btn').disabled = true;
-        document.getElementById('last-refresh').textContent = 'Refreshing...';
-        // serv00 caps the PHP interpreter pool at 3 workers total. Running
-        // profile checks one at a time keeps us well under that even while a
-        // proxy stream (1 worker) and an availability HEAD check (1 worker)
-        // are in flight — parallel api.php calls is what jams the pool.
-        const POOL = 1;
-        let i = 0;
-        const workers = [];
-        const lanes = Math.min(POOL, usernames.length);
-        for (let lane = 0; lane < lanes; lane++) {
-            workers.push((async () => {
-                for (;;) {
-                    const u = usernames[i++];
-                    if (u === undefined) break;
-                    await refreshProfile(u);
-                }
-            })());
+        if (isRefreshing) return;  // prevent re-entry
+        isRefreshing = true;
+        try {
+            if (Object.keys(profiles).length === 0) return;
+            document.getElementById('refresh-all-btn').disabled = true;
+            document.getElementById('last-refresh').textContent = 'Refreshing...';
+            const POOL = 1;
+            let i = 0;
+            const workers = [];
+            const lanes = Math.min(POOL, Object.keys(profiles).length);
+            for (let lane = 0; lane < lanes; lane++) {
+                workers.push((async () => {
+                    for (;;) {
+                        const u = Object.keys(profiles)[i++];
+                        if (u === undefined) break;
+                        await refreshProfile(u);
+                    }
+                })());
+            }
+            await Promise.all(workers);
+            document.getElementById('refresh-all-btn').disabled = false;
+            document.getElementById('last-refresh').textContent = `Last: ${new Date().toLocaleTimeString()}`;
+        } finally {
+            isRefreshing = false;
         }
-        await Promise.all(workers);
-        document.getElementById('refresh-all-btn').disabled = false;
-        document.getElementById('last-refresh').textContent = `Last: ${new Date().toLocaleTimeString()}`;
     }
 
     function toggleAutoRefresh() {
@@ -763,12 +787,26 @@ if ($authed) {
         localStorage.setItem('tt_notify', enabled ? '1' : '0');
         if (enabled) {
             ensureAudio();
-            if (notificationsSupported() && Notification.permission === 'default') {
-                Notification.requestPermission().then(perm => {
-                    if (perm !== 'granted') {
-                        showToast('Notifications blocked — you can enable them in your browser settings, sound will still play.');
-                    }
-                });
+            if (notificationsSupported()) {
+                if (Notification.permission === 'default') {
+                    Notification.requestPermission().then(perm => {
+                        if (perm !== 'granted') {
+                            document.getElementById('notify-toggle').checked = false;
+                            notifyEnabled = false;
+                            localStorage.setItem('tt_notify', '0');
+                            showToast('Notifications blocked — you can enable them in your browser settings, sound will still play.');
+                        } else {
+                            showToast('Browser notifications enabled');
+                        }
+                    });
+                    return; // wait for permission result before showing toast
+                } else if (Notification.permission === 'denied') {
+                    document.getElementById('notify-toggle').checked = false;
+                    notifyEnabled = false;
+                    localStorage.setItem('tt_notify', '0');
+                    showToast('Notifications blocked — you can enable them in your browser settings, sound will still play.');
+                    return;
+                }
             }
             showToast('Browser notifications enabled');
         } else {
@@ -846,7 +884,23 @@ if ($authed) {
     }
 
     function saveProfiles() {
-        localStorage.setItem('tt_profiles', JSON.stringify(profiles));
+        try {
+            localStorage.setItem('tt_profiles', JSON.stringify(profiles));
+        } catch (e) {
+            if (e.name === 'QuotaExceededError') {
+                console.error('localStorage quota exceeded, clearing old data');
+                localStorage.removeItem('tt_profiles');
+                try {
+                    localStorage.setItem('tt_profiles', JSON.stringify(profiles));
+                } catch (e2) {
+                    console.error('Failed to save profiles even after clearing:', e2);
+                    showToast('Storage full — unable to save profiles');
+                }
+            } else {
+                console.error('Failed to save profiles:', e);
+                showToast('Failed to save profiles');
+            }
+        }
     }
 
     function updateCounts() {
@@ -955,6 +1009,15 @@ if ($authed) {
                 </div>
                 <div class="card-body">${bodyContent}</div>
             </div>`;
+    }
+
+    function updateCard(username) {
+        const container = document.getElementById('cards-container');
+        const card = container.querySelector(`[data-username="${escAttr(username)}"]`);
+        if (!card) return;
+        const profile = profiles[username];
+        if (!profile) return;
+        card.outerHTML = renderCard(profile);
     }
 
     const VLC_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -1077,7 +1140,14 @@ function renderUrlGroup(label, url, warning) {
             video.pause();
             video.removeAttribute('src');
             video.load();
+            video.removeEventListener('error', onNativeHlsError);
         }
+    }
+
+    // Error handler for Safari native HLS
+    function onNativeHlsError() {
+        const status = document.getElementById('player-status');
+        if (status) status.textContent = 'Playback error: stream unavailable';
     }
 
     function openPlayer(url, kind) {
@@ -1096,10 +1166,16 @@ function renderUrlGroup(label, url, warning) {
                 window.__hlsInstance = hls;
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
                     status.textContent = '';
-                    video.play().catch(() => {});
+                    video.play().catch(() => {
+                        status.textContent = 'Click the video to start playback';
+                    });
                 });
                 hls.on(Hls.Events.ERROR, (event, data) => {
-                    if (data.fatal) status.textContent = `Playback error: ${data.details || data.type}`;
+                    if (data.fatal) {
+                        status.textContent = `Playback error: ${data.details || data.type}`;
+                        hls.destroy();  // properly clean up on fatal error
+                        window.__hlsInstance = null;
+                    }
                 });
                 hls.loadSource(src);
                 hls.attachMedia(video);
@@ -1107,8 +1183,11 @@ function renderUrlGroup(label, url, warning) {
                 video.src = src;
                 video.addEventListener('loadedmetadata', () => {
                     status.textContent = '';
-                    video.play().catch(() => {});
+                    video.play().catch(() => {
+                        status.textContent = 'Click the video to start playback';
+                    });
                 }, { once: true });
+                video.addEventListener('error', onNativeHlsError);
             } else {
                 status.textContent = 'HLS playback is not supported in this browser.';
             }
@@ -1121,7 +1200,9 @@ function renderUrlGroup(label, url, warning) {
                     status.textContent = `Playback error: ${errType} ${errDetail || ''}`;
                 });
                 flvPlayer.load();
-                flvPlayer.play().catch(() => {});
+                flvPlayer.play().catch(() => {
+                    status.textContent = 'Click the video to start playback';
+                });
                 status.textContent = '';
             } else {
                 status.textContent = 'FLV playback is not supported in this browser.';

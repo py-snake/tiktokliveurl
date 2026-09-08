@@ -18,9 +18,17 @@ return [
     // Proxy settings (leave empty for no proxy)
     'proxy' => '', // e.g., 'http://user:pass@host:port'
 
+    // SSL verification (set true in production with proper CA bundle)
+    'ssl' => [
+        'verify_peer' => false,
+        'verify_host' => false,
+        'ca_bundle' => '', // path to CA bundle if verify_peer=true
+    ],
+
     // CORS settings
     'cors' => [
         'enabled' => false,
         'origins' => ['*'],
+        'allow_credentials' => false,
     ],
 ];
