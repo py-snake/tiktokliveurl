@@ -69,8 +69,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
     <video id="watch-video" controls autoplay playsinline></video>
     <div class="video-bar">
       <span class="title" id="watch-video-title"></span>
-      <button class="btn btn-secondary" onclick="watchCopyMpv()">Copy mpv</button>
-      <button class="btn btn-secondary" onclick="watchPopOut()">Pop-out</button>
     </div>
     <div id="watch-status"></div>
   </div>
@@ -104,8 +102,6 @@ async function apiCall(action, params){
 function fmt(n){ if(!n) return '0'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); }
 let hbTimer=null;
 function watchClearChat(){ document.getElementById('watch-chat-feed').innerHTML=''; }
-function watchCopyMpv(){ if(!watchMpv) return; navigator.clipboard.writeText(watchMpv).then(()=>{const b=document.querySelector('[onclick="watchCopyMpv()"]'); const t=b.textContent; b.textContent='Copied!'; setTimeout(()=>b.textContent=t,1200)}).catch(()=>{prompt('Copy mpv:',watchMpv)}) }
-function watchPopOut(){ const v=document.getElementById('watch-video'); if(v) v.requestFullscreen?.(); }
 function watchSetStatus(t,cls){ const e=document.getElementById('watch-chat-status'); if(e){ e.textContent=t; e.className='chat-status '+(cls||''); } }
 function watchAppend(html){ const f=document.getElementById('watch-chat-feed'); const d=document.createElement('div'); d.innerHTML=html; const el=d.firstElementChild||d; f.appendChild(el); while(f.children.length>400) f.removeChild(f.firstChild); f.scrollTop=f.scrollHeight; }
 function watchToggleChat(){

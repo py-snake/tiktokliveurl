@@ -971,19 +971,19 @@ if ($authed) {
             bodyContent += '<div class="url-section">';
             if (streamUrls.flv && Object.keys(streamUrls.flv).length > 0) {
                 for (const [q, url] of Object.entries(streamUrls.flv)) {
-                    if (url) bodyContent += renderUrlGroup(`FLV ${q}`, url);
+                    if (url) bodyContent += renderUrlGroup(`FLV ${q}`, url, null, username);
                 }
             }
-            if (streamUrls.rtmp) bodyContent += renderUrlGroup('RTMP', streamUrls.rtmp);
+            if (streamUrls.rtmp) bodyContent += renderUrlGroup('RTMP', streamUrls.rtmp, null, username);
             if (streamUrls.hls) {
                 bodyContent += renderUrlGroup('HLS (M3U8)', streamUrls.hls,
-                    'TikTok often blocks HLS CDN access outright, even proxied. Use "mpv" on an FLV link above if this fails.');
+                    'TikTok often blocks HLS CDN access outright, even proxied. Use "mpv" on an FLV link above if this fails.', username);
             }
             if (streamUrls.qualities && streamUrls.qualities.length > 0) {
                 bodyContent += '<div class="qualities-list"><div class="url-label">Additional Qualities</div>';
                 for (const q of streamUrls.qualities) {
                     const url = q.hls || q.flv;
-                    if (url) bodyContent += renderUrlGroup(q.gear || q.key, url);
+                    if (url) bodyContent += renderUrlGroup(q.gear || q.key, url, null, username);
                 }
                 bodyContent += '</div>';
             }
@@ -1064,7 +1064,7 @@ if ($authed) {
         return 'flv';
     }
 
-function renderUrlGroup(label, url, warning) {
+function renderUrlGroup(label, url, warning, usernameForWatch) {
         const mpvCmd = `mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${url}"`;
         const warningHtml = warning ? `<div class="note-box" style="margin-top:6px; margin-bottom:0;">&#9888; ${escHtml(warning)}</div>` : '';
         const kind = streamKind(url);
@@ -1079,7 +1079,7 @@ function renderUrlGroup(label, url, warning) {
             playBtnHtml = `<button id="${btnId}" class="btn-play" onclick="openPlayer('${escAttr(url)}', '${kind}')" title="Play via proxy (may 403 on serv00 — use mpv if fails)">Play</button>`;
         }
 
-        const watchHref = `watch.php?url=${encodeURIComponent(url)}&token=${encodeURIComponent(TOKEN)}`;
+        const watchHref = `watch.php?${usernameForWatch?`username=${encodeURIComponent(usernameForWatch)}&`:''}url=${encodeURIComponent(url)}&token=${encodeURIComponent(TOKEN)}`;
         return `
             <div class="url-group">
                 <div class="url-label">${escHtml(label)}</div>
