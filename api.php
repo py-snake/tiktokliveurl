@@ -584,7 +584,34 @@ function handleChatToken(array $config): void
     $uniqueIdForEuler = $roomId ? null : ($uniqueId ?? $username);
     $roomIdForEuler = $roomId ?: null;
 
+    // live check before minting (avoid handing out fallback for offline rooms)
+    if ($roomId) {
+        $alive = isRoomAlive($config, $roomId);
+        if (!$alive) {
+            http_response_code(404);
+            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Room '.$roomId.' is not currently live — chat unavailable']);
+            return;
+        }
+    }
+
     $euler = chatEulerFetch($config, $roomIdForEuler, $uniqueIdForEuler);
+    // fallback host means Euler could not mint a real TikTok WS (offline / rate-limit / invalid id) — retry via uniqueId if we have username
+    if ($euler['success'] && isset($euler['fetch']['wsUrl']) && str_contains($euler['fetch']['wsUrl'], 'ws-fallback')) {
+        if ($username && $roomIdForEuler !== null) {
+            $retry = chatEulerFetch($config, null, $username);
+            if ($retry['success'] && !str_contains($retry['fetch']['wsUrl'] ?? '', 'ws-fallback')) {
+                $euler = $retry;
+            } else {
+                http_response_code(404);
+                echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — streamer offline or sign server returned fallback ('.$euler['fetch']['wsUrl'].'). Try again when live or set chat.sign_api_key.','details'=> $euler['fetch']['wsUrl']]);
+                return;
+            }
+        } else {
+            http_response_code(404);
+            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — sign server returned fallback ('.$euler['fetch']['wsUrl'].'). Room offline or Euler rate-limited (free tier ~10/day/IP).','details'=> $euler['fetch']['wsUrl']]);
+            return;
+        }
+    }
     if (!$euler['success']) {
         http_response_code($euler['http_code'] ?? 502);
         echo json_encode(['success'=>false,'error'=>$euler['error'],'message'=>$euler['message'] ?? 'Euler sign server error','details'=>$euler['details'] ?? null]);
@@ -603,16 +630,27 @@ function handleChatToken(array $config): void
         }
     }
 
-    $wsParams = array_merge(chatDefaultWsParams($config), $fetch['wsParams'], [
-        'room_id' => $fetch['roomId'] ?? $roomId ?? '',
-        'cursor' => $fetch['cursor'],
-        'internal_ext' => $fetch['internalExt'],
-        'compress' => '', // empty = no gzip, simpler for browser JS (no pako needed)
-    ]);
-    // Euler may already include cursor/internal_ext in wsParams; ensure ours win
+    // Build finalWsUrl — host-aware: Euler fallback/managed hosts need only their own params
+    $isEulerHost = str_contains($fetch['wsUrl'], 'eulerstream.com');
+    if ($isEulerHost) {
+        $wsParams = array_merge($fetch['wsParams'], [
+            'room_id' => $fetch['roomId'] ?? $roomId ?? '',
+            'cursor' => $fetch['cursor'],
+            'internal_ext' => $fetch['internalExt'],
+        ]);
+    } else {
+        $wsParams = array_merge(chatDefaultWsParams($config), $fetch['wsParams'], [
+            'room_id' => $fetch['roomId'] ?? $roomId ?? '',
+            'cursor' => $fetch['cursor'],
+            'internal_ext' => $fetch['internalExt'],
+            'compress' => '', // empty = no gzip, simpler for browser JS (no pako needed)
+        ]);
+    }
     $finalUrl = $fetch['wsUrl'];
     if ($finalUrl) {
-        $finalUrl .= '?' . http_build_query($wsParams, '', '&', PHP_QUERY_RFC3986) . '&version_code=270000';
+        $sep = str_contains($finalUrl, '?') ? '&' : '?';
+        $finalUrl .= $sep . http_build_query($wsParams, '', '&', PHP_QUERY_RFC3986);
+        if (!$isEulerHost) $finalUrl .= '&version_code=270000';
     }
 
     echo json_encode([

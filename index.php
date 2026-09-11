@@ -1385,9 +1385,8 @@ function renderUrlGroup(label, url, warning) {
     }
     async function toggleChat(username){
         const cur=chatSockets[username];
-        if(cur && cur.ws && cur.ws.readyState===WebSocket.OPEN){
-            try{ cur.ws.close(); }catch{}; setChatStatus(username,'— idle',''); document.getElementById('chat-btn-'+username).textContent='Connect Chat';
-            return;
+        if(cur && cur.ws && cur.ws.readyState!==WebSocket.CLOSED && cur.ws.readyState!==WebSocket.CLOSING){
+            try{ cur.ws.close(); }catch{}; return;
         }
         await connectChat(username);
     }
@@ -1432,6 +1431,7 @@ function renderUrlGroup(label, url, warning) {
     }
 
     async function connectChat(username){
+        if(chatSockets[username] && chatSockets[username].ws && chatSockets[username].ws.readyState!==WebSocket.CLOSED) { showToast('Chat already connecting/connected for @'+username); return; }
         const btn=document.getElementById('chat-btn-'+username);
         const feed=document.getElementById('chat-feed-'+username);
         if(!btn||!feed) return;
@@ -1509,10 +1509,21 @@ function renderUrlGroup(label, url, warning) {
             ws.onclose=(ev)=>{
                 if(rec.hbTimer) clearInterval(rec.hbTimer);
                 rec.closed=true; delete chatSockets[username];
-                const st=ev.code===1000? 'closed':'disconnected ('+ev.code+')';
+                // 1006 = abnormal (firewall/rate-limit/fallback), 1011 = internal
+                let hint='';
+                if(ev.code===1006) hint=' — check if room still live, or Euler rate-limited (free tier ~10/day); try later or set chat.sign_api_key';
+                else if(ev.code===1011) hint=' — internal error';
+                const st=(ev.code===1000? 'closed':`disconnected (${ev.code}${hint})`);
                 setChatStatus(username, st, 'err'); btn.textContent='Connect Chat'; btn.classList.remove('live'); btn.disabled=false;
+                if(ev.code!==1000 && ev.code!==1005){
+                    appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">Disconnected: code ${ev.code} ${ev.reason||''}${hint}</div>`);
+                }
             };
-            ws.onerror=()=>{ setChatStatus(username,'ws error','err'); };
+            ws.onerror=(ev)=>{
+                console.warn('ws error', ev);
+                setChatStatus(username,'ws error — see console (offline or Euler fallback?)','err');
+                appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">WebSocket error — room may be offline or sign server returned fallback. Check api chat_token response.</div>`);
+            };
         }catch(e){
             console.error(e); setChatStatus(username,'error','err'); showToast('Chat connect failed'); btn.disabled=false; btn.textContent='Connect Chat';
         }
