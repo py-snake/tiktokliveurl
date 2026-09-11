@@ -989,7 +989,7 @@ if ($authed) {
             }
             bodyContent += '</div>';
 
-            // php+js live chat (browser WSS, php mints signed URL)
+            // pure TikTok live chat via SSE (no 3rd party — php holds WSS with ttwid)
             bodyContent += `
                 <div class="chat-section" data-chat="${escAttr(username)}">
                     <div class="url-label">Live Chat <span class="chat-status" id="chat-status-${escAttr(username)}">— idle</span></div>
@@ -998,7 +998,7 @@ if ($authed) {
                         <button class="btn btn-chat" style="padding:6px 12px;font-size:0.8rem" onclick="toggleChat('${escAttr(username)}')" id="chat-btn-${escAttr(username)}">Connect Chat</button>
                         <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem" onclick="clearChat('${escAttr(username)}')">Clear</button>
                     </div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px">PHP mints signed <code>wss://</code> via <code>api.php?action=chat_token</code>; browser streams comments/gifts/likes. Free Euler tier ~10/day/IP.</div>
+                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px">Pure TikTok: <code>chat_sse.php</code> fetches <code>ttwid</code> then proxies <code>wss://webcast-ws.tiktok.com</code> as SSE — no Euler, no API key.</div>
                 </div>`;
 
             bodyContent += '<div class="card-actions">';
@@ -1386,8 +1386,12 @@ function renderUrlGroup(label, url, warning) {
     }
     async function toggleChat(username){
         const cur=chatSockets[username];
-        if(cur && cur.ws && cur.ws.readyState!==WebSocket.CLOSED && cur.ws.readyState!==WebSocket.CLOSING){
-            try{ cur.ws.close(); }catch{}; return;
+        if(cur){
+            // close either WS or SSE
+            try{ if(cur.ws) cur.ws.close(); if(cur.es) cur.es.close(); if(cur.hbTimer) clearInterval(cur.hbTimer); }catch{}
+            delete chatSockets[username];
+            setChatStatus(username,'— idle',''); const b=document.getElementById('chat-btn-'+username); if(b){ b.textContent='Connect Chat'; b.disabled=false; b.classList.remove('live'); }
+            return;
         }
         await connectChat(username);
     }
@@ -1432,98 +1436,42 @@ function renderUrlGroup(label, url, warning) {
     }
 
     async function connectChat(username){
-        if(chatSockets[username] && chatSockets[username].ws && chatSockets[username].ws.readyState!==WebSocket.CLOSED) { showToast('Chat already connecting/connected for @'+username); return; }
+        if(chatSockets[username] && (chatSockets[username].es || chatSockets[username].ws)) { showToast('Chat already connecting/connected for @'+username); return; }
         const btn=document.getElementById('chat-btn-'+username);
         const feed=document.getElementById('chat-feed-'+username);
         if(!btn||!feed) return;
-        btn.disabled=true; btn.textContent='Fetching token…'; setChatStatus(username,'fetching…','');
+        // pure TikTok SSE — no 3rd party, no Euler. PHP holds WSS with ttwid and streams as SSE.
+        btn.disabled=true; btn.textContent='Connecting…'; setChatStatus(username,'connecting via TikTok…','');
         try{
-            const data=await apiCall('chat_token', { username });
-            if(!data || !data.success){
-                const msg=data?.message||'chat_token failed';
-                setChatStatus(username, 'error: '+msg, 'err'); showToast(msg); btn.disabled=false; btn.textContent='Connect Chat'; return;
-            }
-            const d=data.data;
-            // render history (already decoded by php)
-            if(Array.isArray(d.history)){
-                for(const h of d.history){
-                    if(h.type==='chat') appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(h.user?.uniqueId||h.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(h.comment)}</span></div>`);
-                    else if(h.type==='gift') appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(h.user?.uniqueId||'?')} gift ${h.giftId} ×${h.repeatCount}</div>`);
-                    else if(h.type==='like') appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(h.user?.uniqueId||'?')} +${h.likeCount}</div>`);
-                }
-            }
-            const wsUrl=d.finalWsUrl || d.wsUrl;
-            if(!wsUrl){ setChatStatus(username,'no wsUrl','err'); btn.disabled=false; btn.textContent='Connect Chat'; return; }
-            setChatStatus(username,'connecting…',''); btn.textContent='Connecting…';
-            const ws=new WebSocket(wsUrl);
-            ws.binaryType='arraybuffer';
-            const rec={ws, roomId: d.room_id, hbTimer:null, closed:false};
+            const esUrl=`chat_sse.php?username=${encodeURIComponent(username)}&token=${encodeURIComponent(TOKEN)}`;
+            const es=new EventSource(esUrl);
+            const rec={es, ws:null, hbTimer:null, closed:false};
             chatSockets[username]=rec;
-            ws.onopen=()=>{
+            es.onopen=()=>{
                 setChatStatus(username,'live ✓','live'); btn.textContent='Disconnect'; btn.disabled=false; btn.classList.add('live');
-                appendChat(username, `<div class="chat-msg" style="color:var(--text-muted);font-size:0.75rem">Connected to room ${escHtml(d.room_id)} — streaming…</div>`);
-                // heartbeat + ack
-                const hbMs=(d.heartBeatDuration>0? d.heartBeatDuration:10000);
-                if(hbMs){
-                    const hbPayload=WsCodec.encodeHeartbeat(d.room_id||'');
-                    const hbFrame=WsCodec.encodePushFrame('hb', hbPayload);
-                    rec.hbTimer=setInterval(()=>{ try{ if(ws.readyState===1) ws.send(hbFrame); }catch{} }, hbMs);
-                }
-                if(d.needsAck && d.internalExt){
-                    try{
-                        const ackFrame=WsCodec.encodePushFrame('ack', new TextEncoder().encode(d.internalExt));
-                        ws.send(ackFrame);
-                    }catch{}
-                }
+                appendChat(username, `<div class="chat-msg" style="color:var(--text-muted);font-size:0.75rem">Connected — streaming live chat (pure TikTok, no 3rd party)…</div>`);
             };
-            ws.onmessage=async (ev)=>{
+            es.onmessage=(ev)=>{
                 try{
-                    let u8; if(ev.data instanceof ArrayBuffer) u8=new Uint8Array(ev.data); else if(ev.data instanceof Uint8Array) u8=ev.data; else if(ev.data instanceof Blob) u8=new Uint8Array(await ev.data.arrayBuffer()); else return;
-                    // outer PushFrame
-                    const frame=WsCodec.decodePushFrame(u8);
-                    // decompress payload if gzipped
-                    let payload=frame.payload;
-                    if(payload && payload.length){
-                        payload=await decompressGzip(payload);
-                    } else if(frame.payloadType==='msg' && !payload.length){
-                        return;
-                    }
-                    // payload should be FetchResult
-                    if(frame.payloadType==='msg' || (payload && payload.length)){
-                        let fetchRes;
-                        try{ fetchRes=WsCodec.decodeFetchResult(payload); }catch{ return; }
-                        for(const m of fetchRes.messages){
-                            if(m.type==='WebcastChatMessage'){
-                                const c=WsCodec.decodeChat(m.payload);
-                                appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(c.user?.uniqueId||c.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(c.comment)}</span></div>`);
-                            } else if(m.type==='WebcastGiftMessage'){
-                                const g=WsCodec.decodeGift(m.payload);
-                                if(g.repeatEnd!==0 || g.giftId) appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(g.user?.uniqueId||'?')} gift ${g.giftId} ×${g.repeatCount}</div>`);
-                            } else if(m.type==='WebcastLikeMessage'){
-                                const l=WsCodec.decodeLike(m.payload);
-                                appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(l.user?.uniqueId||'?')} +${l.likeCount}</div>`);
-                            }
-                        }
-                    }
-                }catch(e){ console.warn('chat decode',e); }
+                    const data=JSON.parse(ev.data);
+                    if(data.type==='chat') appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(data.user?.uniqueId||data.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(data.comment)}</span></div>`);
+                    else if(data.type==='gift') appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(data.user?.uniqueId||'?')} gift ${data.giftId} ×${data.repeatCount||1}</div>`);
+                    else if(data.type==='like') appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(data.user?.uniqueId||'?')} +${data.likeCount||1}</div>`);
+                    else if(data.type==='connected') setChatStatus(username,'live ✓','live');
+                    else if(data.type==='status') setChatStatus(username, data.message, '');
+                    else if(data.type==='error'){ setChatStatus(username,'error: '+(data.message||'error'),'err'); appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">${escHtml(data.message||'error')}</div>`); showToast(data.message||'Chat error'); }
+                    else if(data.type==='disconnected'){ setChatStatus(username,'disconnected','err'); }
+                }catch(e){ console.warn('sse parse',e,ev.data); }
             };
-            ws.onclose=(ev)=>{
-                if(rec.hbTimer) clearInterval(rec.hbTimer);
-                rec.closed=true; delete chatSockets[username];
-                // 1006 = abnormal (firewall/rate-limit/fallback), 1011 = internal
-                let hint='';
-                if(ev.code===1006) hint=' — check if room still live, or Euler rate-limited (free tier ~10/day); try later or set chat.sign_api_key';
-                else if(ev.code===1011) hint=' — internal error';
-                const st=(ev.code===1000? 'closed':`disconnected (${ev.code}${hint})`);
-                setChatStatus(username, st, 'err'); btn.textContent='Connect Chat'; btn.classList.remove('live'); btn.disabled=false;
-                if(ev.code!==1000 && ev.code!==1005){
-                    appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">Disconnected: code ${ev.code} ${ev.reason||''}${hint}</div>`);
+            es.onerror=()=>{
+                // EventSource auto-reconnects; show status but keep open
+                setChatStatus(username,'sse error / reconnecting…','err');
+                // if closed state, cleanup
+                if(es.readyState===EventSource.CLOSED){
+                    delete chatSockets[username];
+                    btn.textContent='Connect Chat'; btn.disabled=false; btn.classList.remove('live');
+                    appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">Stream ended or room offline. Reconnect when live.</div>`);
                 }
-            };
-            ws.onerror=(ev)=>{
-                console.warn('ws error', ev);
-                setChatStatus(username,'ws error — see console (offline or Euler fallback?)','err');
-                appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">WebSocket error — room may be offline or sign server returned fallback. Check api chat_token response.</div>`);
             };
         }catch(e){
             console.error(e); setChatStatus(username,'error','err'); showToast('Chat connect failed'); btn.disabled=false; btn.textContent='Connect Chat';

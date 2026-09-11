@@ -173,6 +173,9 @@ final class TikTokCodec
     public static function encodeHeartbeat(string $roomId): string {
         $w=new TikTokProtoWriter(); if($roomId!=='0'&&$roomId!=='') $w->writeInt64StringField(1,$roomId); $w->writeInt64StringField(2,'1'); return $w->getBytes();
     }
+    public static function encodeEnterRoom(string $roomId): string {
+        $w=new TikTokProtoWriter(); if($roomId!=='0'&&$roomId!=='') $w->writeInt64StringField(1,$roomId); $w->writeInt64StringField(4,'12'); $w->writeStringField(5,'audience'); return $w->getBytes();
+    }
     public static function encodePushFrame(string $payloadType,string $payload,string $payloadEncoding='pb',string $logId='0'): string {
         $w=new TikTokProtoWriter(); if($logId!=='0'&&$logId!=='') $w->writeInt64StringField(2,$logId); if($payloadEncoding!=='') $w->writeStringField(6,$payloadEncoding); if($payloadType!=='') $w->writeStringField(7,$payloadType); if($payload!=='') $w->writeBytesField(8,$payload); return $w->getBytes();
     }
