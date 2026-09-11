@@ -67,9 +67,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="layout">
   <div class="video-pane">
     <video id="watch-video" controls autoplay playsinline></video>
-    <div class="video-bar">
-      <span class="title" id="watch-video-title"></span>
-    </div>
     <div id="watch-status"></div>
   </div>
   <div class="chat-pane">
@@ -150,7 +147,6 @@ async function watchInit(){
   if(!d.is_live){ document.getElementById('watch-title').textContent=`@${d.username} is offline`; document.getElementById('watch-badge').style.display='none'; return; }
   watchRoom=d.room;
   document.getElementById('watch-title').textContent=d.room?.title||`@${d.username} — LIVE`;
-  document.getElementById('watch-video-title').textContent=d.room?.title||'';
   document.getElementById('watch-viewers').textContent=d.room?`${fmt(d.room.viewer_count)} viewers • ${fmt(d.room.like_count)} likes`:'';
   document.getElementById('watch-badge').classList.add('live'); document.getElementById('watch-badge').style.display='inline-flex';
   const urls=d.room?.stream_urls||{};
