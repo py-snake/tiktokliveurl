@@ -1073,8 +1073,9 @@ function renderUrlGroup(label, url, warning) {
         if (!kind) {
             playBtnHtml = `<button class="btn-play" disabled title="RTMP can't be played in a browser — use the mpv command">Play</button>`;
         } else {
-            playBtnHtml = `<button id="${btnId}" class="btn-play checking" onclick="openPlayer('${escAttr(url)}', '${kind}')" title="Checking availability&hellip;">Play</button>`;
-            queueAvailCheck(btnId, url);
+            // No auto HEAD probe — proxy 403 is expected for HLS and noisy in console.
+            // Play attempts go through proxy.php and show status inside player; mpv is fallback.
+            playBtnHtml = `<button id="${btnId}" class="btn-play" onclick="openPlayer('${escAttr(url)}', '${kind}')" title="Play via proxy (may 403 on serv00 — use mpv if fails)">Play</button>`;
         }
 
         return `

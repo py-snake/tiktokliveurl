@@ -584,12 +584,11 @@ function handleChatToken(array $config): void
     $uniqueIdForEuler = $roomId ? null : ($uniqueId ?? $username);
     $roomIdForEuler = $roomId ?: null;
 
-    // live check before minting (avoid handing out fallback for offline rooms)
+    // live check before minting (avoid handing out fallback for offline rooms) — return 200 to avoid console 404 noise
     if ($roomId) {
         $alive = isRoomAlive($config, $roomId);
         if (!$alive) {
-            http_response_code(404);
-            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Room '.$roomId.' is not currently live — chat unavailable']);
+            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Room '.$roomId.' is not currently live — chat unavailable (offline)']);
             return;
         }
     }
@@ -602,18 +601,16 @@ function handleChatToken(array $config): void
             if ($retry['success'] && !str_contains($retry['fetch']['wsUrl'] ?? '', 'ws-fallback')) {
                 $euler = $retry;
             } else {
-                http_response_code(404);
-                echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — streamer offline or sign server returned fallback ('.$euler['fetch']['wsUrl'].'). Try again when live or set chat.sign_api_key.','details'=> $euler['fetch']['wsUrl']]);
+                echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — streamer offline or sign server returned fallback. Try again when live or set chat.sign_api_key.','details'=> $euler['fetch']['wsUrl']]);
                 return;
             }
         } else {
-            http_response_code(404);
-            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — sign server returned fallback ('.$euler['fetch']['wsUrl'].'). Room offline or Euler rate-limited (free tier ~10/day/IP).','details'=> $euler['fetch']['wsUrl']]);
+            echo json_encode(['success'=>false,'error'=>'Not live','message'=>'Live chat unavailable — sign server returned fallback. Room offline or Euler rate-limited (free tier ~10/day/IP).','details'=> $euler['fetch']['wsUrl']]);
             return;
         }
     }
     if (!$euler['success']) {
-        http_response_code($euler['http_code'] ?? 502);
+        // return 200 to keep console quiet; frontend checks success flag
         echo json_encode(['success'=>false,'error'=>$euler['error'],'message'=>$euler['message'] ?? 'Euler sign server error','details'=>$euler['details'] ?? null]);
         return;
     }
