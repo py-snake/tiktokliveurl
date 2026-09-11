@@ -1132,10 +1132,70 @@ function renderUrlGroup(label, url, warning) {
         }
     }
 
+    let __playGen = 0;          // bumped on every open/close; stale retries check this
+    let __playRetryTimer = null;
+    let __playWatchTimer = null;
+    let __playCtx = null;       // { url, kind, attempt, gen } for error handlers
+    let __lastT = -1;
+    let __lastAdvance = Date.now();
+    const PLAYER_MAX_BACKOFF_MS = 15000;
+    const PLAYER_STALL_MS = 20000;
+
+    function playerStillOpen(gen) {
+        return gen === __playGen
+            && document.getElementById('player-modal').classList.contains('show');
+    }
+
+    function clearPlayerTimers() {
+        if (__playRetryTimer) { clearTimeout(__playRetryTimer); __playRetryTimer = null; }
+        if (__playWatchTimer) { clearInterval(__playWatchTimer); __playWatchTimer = null; }
+    }
+
+    function schedulePlayerRetry(note) {
+        const ctx = __playCtx;
+        if (!ctx || !playerStillOpen(ctx.gen)) return;
+        const attempt = ctx.attempt + 1;
+        const delay = Math.min(2000 * attempt, PLAYER_MAX_BACKOFF_MS);
+        clearPlayerTimers();
+        const status = document.getElementById('player-status');
+        let msg = `Connection lost${note ? ' ' + note : ''} — retrying in ${Math.round(delay / 1000)}s (attempt ${attempt})…`;
+        if (attempt >= 5) msg += ' If this persists the signed URL may have expired — close and Refresh.';
+        if (status) status.textContent = msg;
+        __playCtx = { url: ctx.url, kind: ctx.kind, attempt, gen: ctx.gen };
+        __playRetryTimer = setTimeout(() => {
+            __playRetryTimer = null;
+            if (!playerStillOpen(ctx.gen)) return;
+            startPlayback(ctx.url, ctx.kind, attempt, ctx.gen);
+        }, delay);
+    }
+
+    function armPlaybackWatchdog() {
+        const ctx = __playCtx;
+        if (!ctx) return;
+        if (__playWatchTimer) { clearInterval(__playWatchTimer); __playWatchTimer = null; }
+        __lastT = -1;
+        __lastAdvance = Date.now();
+        const video = document.getElementById('player-video');
+        __playWatchTimer = setInterval(() => {
+            const c = __playCtx;
+            if (!c || !playerStillOpen(c.gen) || !video) {
+                clearInterval(__playWatchTimer);
+                __playWatchTimer = null;
+                return;
+            }
+            if (video.paused || video.ended) { __lastAdvance = Date.now(); return; }
+            const t = video.currentTime;
+            if (t !== __lastT) { __lastT = t; __lastAdvance = Date.now(); return; }
+            if (Date.now() - __lastAdvance > PLAYER_STALL_MS) {
+                schedulePlayerRetry('(stalled)');
+            }
+        }, 5000);
+    }
+
     function destroyPlayers() {
         const video = document.getElementById('player-video');
-        if (window.__hlsInstance) { window.__hlsInstance.destroy(); window.__hlsInstance = null; }
-        if (window.__flvInstance) { window.__flvInstance.destroy(); window.__flvInstance = null; }
+        if (window.__hlsInstance) { try { window.__hlsInstance.destroy(); } catch { /* noop */ } window.__hlsInstance = null; }
+        if (window.__flvInstance) { try { window.__flvInstance.destroy(); } catch { /* noop */ } window.__flvInstance = null; }
         if (video) {
             video.pause();
             video.removeAttribute('src');
@@ -1146,17 +1206,27 @@ function renderUrlGroup(label, url, warning) {
 
     // Error handler for Safari native HLS
     function onNativeHlsError() {
-        const status = document.getElementById('player-status');
-        if (status) status.textContent = 'Playback error: stream unavailable';
+        schedulePlayerRetry();
     }
 
     function openPlayer(url, kind) {
         const modal = document.getElementById('player-modal');
-        const video = document.getElementById('player-video');
         const status = document.getElementById('player-status');
+        __playGen += 1;
+        clearPlayerTimers();
         destroyPlayers();
         status.textContent = 'Loading…';
         modal.classList.add('show');
+        startPlayback(url, kind, 1, __playGen);
+    }
+
+    function startPlayback(url, kind, attempt, gen) {
+        if (!playerStillOpen(gen)) return;
+        const video = document.getElementById('player-video');
+        const status = document.getElementById('player-status');
+        destroyPlayers();
+        __playCtx = { url, kind, attempt, gen };
+        if (attempt > 1 && status) status.textContent = `Reconnecting (attempt ${attempt})…`;
 
         const src = proxyUrl(url);
 
@@ -1165,29 +1235,34 @@ function renderUrlGroup(label, url, warning) {
                 const hls = new Hls();
                 window.__hlsInstance = hls;
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (!playerStillOpen(gen)) return;
                     status.textContent = '';
+                    __lastAdvance = Date.now();
                     video.play().catch(() => {
                         status.textContent = 'Click the video to start playback';
                     });
                 });
                 hls.on(Hls.Events.ERROR, (event, data) => {
-                    if (data.fatal) {
-                        status.textContent = `Playback error: ${data.details || data.type}`;
-                        hls.destroy();  // properly clean up on fatal error
-                        window.__hlsInstance = null;
-                    }
+                    if (!data.fatal || !playerStillOpen(gen)) return;
+                    try { hls.destroy(); } catch { /* noop */ }
+                    window.__hlsInstance = null;
+                    schedulePlayerRetry();
                 });
                 hls.loadSource(src);
                 hls.attachMedia(video);
+                armPlaybackWatchdog();
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 video.src = src;
                 video.addEventListener('loadedmetadata', () => {
+                    if (!playerStillOpen(gen)) return;
                     status.textContent = '';
+                    __lastAdvance = Date.now();
                     video.play().catch(() => {
                         status.textContent = 'Click the video to start playback';
                     });
                 }, { once: true });
                 video.addEventListener('error', onNativeHlsError);
+                armPlaybackWatchdog();
             } else {
                 status.textContent = 'HLS playback is not supported in this browser.';
             }
@@ -1197,13 +1272,18 @@ function renderUrlGroup(label, url, warning) {
                 window.__flvInstance = flvPlayer;
                 flvPlayer.attachMediaElement(video);
                 flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail) => {
-                    status.textContent = `Playback error: ${errType} ${errDetail || ''}`;
+                    if (!playerStillOpen(gen)) return;
+                    try { flvPlayer.destroy(); } catch { /* noop */ }
+                    window.__flvInstance = null;
+                    schedulePlayerRetry(`${errType} ${errDetail || ''}`.trim());
                 });
                 flvPlayer.load();
                 flvPlayer.play().catch(() => {
-                    status.textContent = 'Click the video to start playback';
+                    if (playerStillOpen(gen)) status.textContent = 'Click the video to start playback';
                 });
                 status.textContent = '';
+                __lastAdvance = Date.now();
+                armPlaybackWatchdog();
             } else {
                 status.textContent = 'FLV playback is not supported in this browser.';
             }
@@ -1211,6 +1291,9 @@ function renderUrlGroup(label, url, warning) {
     }
 
     function closePlayer() {
+        __playGen += 1;
+        __playCtx = null;
+        clearPlayerTimers();
         document.getElementById('player-modal').classList.remove('show');
         destroyPlayers();
     }
