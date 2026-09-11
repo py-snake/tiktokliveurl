@@ -73,7 +73,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
       <button class="btn btn-secondary" onclick="watchPopOut()">Pop-out</button>
     </div>
     <div id="watch-status"></div>
-    <div class="note">Video via <code>proxy.php</code> (<code>pull-f5-*</code> FLV is most reliable; HLS often <code>403</code>). If black, use mpv: <code id="watch-mpv-cmd" style="word-break:break-all"></code></div>
   </div>
   <div class="chat-pane">
     <div class="chat-head"><h2>Live Chat</h2><span class="chat-status" id="watch-chat-status">—</span></div>
@@ -170,7 +169,6 @@ async function watchInit(){
   }
   if(!pick){ document.getElementById('watch-status').textContent='No stream URL available (TikTok returned empty). Try mpv or refresh.'; return; }
   watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${pick}"`;
-  document.getElementById('watch-mpv-cmd').textContent=watchMpv;
   watchPlay(pick, kind);
   // auto-connect chat
   watchConnectChat();
@@ -201,7 +199,6 @@ function watchPlay(url, kind){
     } else status.textContent='FLV not supported';
   }
   watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${url}"`;
-  document.getElementById('watch-mpv-cmd').textContent=watchMpv;
 }
 document.addEventListener('DOMContentLoaded', watchInit);
 </script>
