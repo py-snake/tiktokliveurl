@@ -19,8 +19,9 @@ $urlParam = trim($_GET['url'] ?? '');
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f0f0f;--bg2:#1a1a1a;--card:#222;--text:#fff;--muted:#aaa;--dim:#666;--accent:#fe2c55;--success:#25d366;--border:#333;--r:12px;--rs:8px}
+html,body{height:100%;overflow:hidden}
 body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-.topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;flex-shrink:0}
 .topbar a{color:var(--muted);text-decoration:none;font-size:0.9rem}
 .topbar a:hover{color:var(--text)}
 .topbar h1{font-size:1rem;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -28,9 +29,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .topbar .badge.live{display:inline-flex;align-items:center;gap:6px}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.layout{display:flex;height:calc(100vh - 48px)}
-.video-pane{flex:1 1 68%;background:#000;display:flex;flex-direction:column;min-width:0}
-#watch-video{width:100%;flex:1;max-height:100%;background:#000;display:block}
+.layout{display:flex;height:calc(100vh - 48px);overflow:hidden}
+.video-pane{flex:1 1 68%;background:#000;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+#watch-video{width:100%;flex:1;min-height:0;background:#000;display:block;object-fit:contain}
 .video-bar{padding:8px 12px;background:var(--card);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:0.85rem;color:var(--muted)}
 .video-bar .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
 .btn{padding:8px 14px;border:none;border-radius:var(--rs);font-weight:600;cursor:pointer;font-size:0.85rem}
@@ -177,7 +178,7 @@ function watchPlay(url, kind){
   if(kind==='hls'){
     if(window.Hls && Hls.isSupported()){
       const hls=new Hls(); window.__hls=hls;
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{ status.textContent=''; video.play().catch(()=> status.textContent='Click video to play'); });
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{ status.textContent=''; video.play().catch(()=>{}); });
       hls.on(Hls.Events.ERROR,(e,d)=>{ if(d.fatal) status.textContent=`Playback error: ${d.details||d.type}`; });
       hls.loadSource(src); hls.attachMedia(video);
     } else if(video.canPlayType('application/vnd.apple.mpegurl')){
@@ -187,7 +188,7 @@ function watchPlay(url, kind){
     if(window.flvjs && flvjs.isSupported()){
       const p=flvjs.createPlayer({type:'flv',url:src,isLive:true}); window.__flv=p;
       p.attachMediaElement(video); p.on(flvjs.Events.ERROR,(t,d)=> status.textContent=`FLV error: ${t} ${d||''}`);
-      p.load(); p.play().catch(()=> status.textContent='Click video to play'); status.textContent='';
+      p.load(); p.play().catch(()=>{}); status.textContent='';
     } else status.textContent='FLV not supported';
   }
   watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${url}"`;

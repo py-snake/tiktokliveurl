@@ -1271,9 +1271,7 @@ function renderUrlGroup(label, url, warning, usernameForWatch) {
                     if (!playerStillOpen(gen)) return;
                     status.textContent = '';
                     __lastAdvance = Date.now();
-                    video.play().catch(() => {
-                        status.textContent = 'Click the video to start playback';
-                    });
+                    video.play().catch(() => {});
                 });
                 hls.on(Hls.Events.ERROR, (event, data) => {
                     if (!data.fatal || !playerStillOpen(gen)) return;
@@ -1290,9 +1288,7 @@ function renderUrlGroup(label, url, warning, usernameForWatch) {
                     if (!playerStillOpen(gen)) return;
                     status.textContent = '';
                     __lastAdvance = Date.now();
-                    video.play().catch(() => {
-                        status.textContent = 'Click the video to start playback';
-                    });
+                    video.play().catch(() => {});
                 }, { once: true });
                 video.addEventListener('error', onNativeHlsError);
                 armPlaybackWatchdog();
@@ -1311,9 +1307,7 @@ function renderUrlGroup(label, url, warning, usernameForWatch) {
                     schedulePlayerRetry(`${errType} ${errDetail || ''}`.trim());
                 });
                 flvPlayer.load();
-                flvPlayer.play().catch(() => {
-                    if (playerStillOpen(gen)) status.textContent = 'Click the video to start playback';
-                });
+                flvPlayer.play().catch(()=>{});
                 status.textContent = '';
                 __lastAdvance = Date.now();
                 armPlaybackWatchdog();
