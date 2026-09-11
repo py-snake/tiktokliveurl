@@ -71,6 +71,9 @@ instrumentSource(file_get_contents($repo . '/proxy.php'), $repo . '/proxy.php', 
 instrumentSource(file_get_contents($repo . '/tiktok_signer.php'), $repo . '/tiktok_signer.php', $work . '/gen/tiktok_signer.php', $log, $covPath);
 instrumentSource(file_get_contents($repo . '/config.php'), $repo . '/config.php', $work . '/gen/config.php', $log, $covPath);
 instrumentSource(file_get_contents($repo . '/index.php'), $repo . '/index.php', $work . '/gen/index.php', $log, $covPath);
+if (is_file($repo . '/tiktok_codec.php')) {
+    instrumentSource(file_get_contents($repo . '/tiktok_codec.php'), $repo . '/tiktok_codec.php', $work . '/gen/tiktok_codec.php', $log, $covPath);
+}
 
 // ---- start servers -------------------------------------------------------
 $mockPort = T::freePort();
@@ -108,9 +111,12 @@ instrumentSource($cfg, $repo . '/config.php', $work . '/webroot/config.php', $lo
 copy($work . '/gen/api.php', $work . '/webroot/api.php');
 copy($work . '/gen/proxy.php', $work . '/webroot/proxy.php');
 copy($work . '/gen/index.php', $work . '/webroot/index.php');
+if (is_file($work . '/gen/tiktok_codec.php')) copy($work . '/gen/tiktok_codec.php', $work . '/webroot/tiktok_codec.php');
+elseif (is_file($repo . '/tiktok_codec.php')) copy($repo . '/tiktok_codec.php', $work . '/webroot/tiktok_codec.php');
 
 // sanity: generated webroot must pass php -l before we run anything
-foreach (['api.php', 'proxy.php', 'config.php', 'index.php'] as $f) {
+foreach (['api.php', 'proxy.php', 'config.php', 'index.php', 'tiktok_codec.php'] as $f) {
+    if (!is_file($work . '/webroot/' . $f) && !is_file($work . '/gen/' . $f)) continue;
     $out = [];
     $rc = 0;
     exec('php -l ' . escapeshellarg($work . '/webroot/' . $f) . ' 2>&1', $out, $rc);

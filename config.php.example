@@ -31,4 +31,14 @@ return [
         'origins' => ['*'],
         'allow_credentials' => false,
     ],
+
+    // Chat / WebSocket signing (EulerStream)
+    // For live comments: browser JS connects outbound wss://, PHP mints
+    // the signed URL via this sign server. Free tier works without a key
+    // but is heavily rate-limited (~10/day/IP). Set SIGN_API_KEY for
+    // production or self-host via SIGN_API_URL.
+    'chat' => [
+        'sign_api_key' => '', // or env SIGN_API_KEY
+        'sign_api_base' => 'https://tiktok.eulerstream.com', // or env SIGN_API_URL
+    ],
 ];

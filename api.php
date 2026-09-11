@@ -3,6 +3,7 @@
 header('Content-Type: application/json; charset=utf-8');
 
 $config = require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/tiktok_codec.php';
 
 const ERR_BAD_REQUEST = 'Bad Request';
 const RATE_LIMIT_MAX = 30;      // max requests
@@ -119,12 +120,15 @@ switch ($action) {
     case 'room_info':
         handleRoomInfo($config);
         break;
+    case 'chat_token':
+        handleChatToken($config);
+        break;
     default:
         http_response_code(400);
         echo json_encode([
             'success' => false,
             'error' => ERR_BAD_REQUEST,
-            'message' => 'Invalid action. Use "check" or "room_info".',
+            'message' => 'Invalid action. Use "check", "room_info" or "chat_token".',
         ]);
         exit;
 }
@@ -537,6 +541,240 @@ function parseStreamUrls(array $streamUrl): array
     }
 
     return $urls;
+}
+
+function handleChatToken(array $config): void
+{
+    // separate rate limit for chat_token (more strict)
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    if (!checkRateLimit('chat_token:' . $ip)) {
+        http_response_code(429);
+        echo json_encode(['success'=>false,'error'=>'Too Many Requests','message'=>'Rate limit for chat_token exceeded']);
+        return;
+    }
+
+    $username = trim($_GET['username'] ?? $_POST['username'] ?? '');
+    $roomId = trim($_GET['room_id'] ?? $_POST['room_id'] ?? '');
+
+    if ($roomId === '' && $username !== '') {
+        $username = extractUsername($username);
+        $roomId = getRoomId($config, $username);
+        if (!$roomId) {
+            http_response_code(404);
+            echo json_encode(['success'=>false,'error'=>'Not Found','message'=>'Could not resolve roomId for @'.$username.' (offline or invalid username)']);
+            return;
+        }
+    }
+    if ($roomId === '') {
+        // also allow uniqueId param as fallback
+        $uniqueId = trim($_GET['uniqueId'] ?? $_POST['uniqueId'] ?? '');
+        if ($uniqueId !== '') {
+            $username = extractUsername($uniqueId);
+            $roomId = null; // will use uniqueId mode for Euler
+        } else {
+            http_response_code(400);
+            echo json_encode(['success'=>false,'error'=>ERR_BAD_REQUEST,'message'=>'username or room_id required']);
+            return;
+        }
+    } else {
+        $uniqueId = null;
+    }
+
+    // if username still empty but roomId given, keep it
+    $uniqueIdForEuler = $roomId ? null : ($uniqueId ?? $username);
+    $roomIdForEuler = $roomId ?: null;
+
+    $euler = chatEulerFetch($config, $roomIdForEuler, $uniqueIdForEuler);
+    if (!$euler['success']) {
+        http_response_code($euler['http_code'] ?? 502);
+        echo json_encode(['success'=>false,'error'=>$euler['error'],'message'=>$euler['message'] ?? 'Euler sign server error','details'=>$euler['details'] ?? null]);
+        return;
+    }
+
+    $fetch = $euler['fetch'];
+    $history = [];
+    foreach ($fetch['messages'] as $m) {
+        if ($m['type'] === 'WebcastChatMessage') {
+            try { $c = TikTokCodec::decodeChat($m['payload']); $history[] = ['type'=>'chat','user'=>$c['user'],'comment'=>$c['comment']]; } catch (Throwable $e) {}
+        } elseif ($m['type'] === 'WebcastGiftMessage') {
+            try { $g = TikTokCodec::decodeGift($m['payload']); $history[] = ['type'=>'gift','giftId'=>$g['giftId'],'repeatCount'=>$g['repeatCount'],'repeatEnd'=>$g['repeatEnd'],'user'=>$g['user']]; } catch (Throwable $e) {}
+        } elseif ($m['type'] === 'WebcastLikeMessage') {
+            try { $l = TikTokCodec::decodeLike($m['payload']); $history[] = ['type'=>'like','likeCount'=>$l['likeCount'],'totalLikeCount'=>$l['totalLikeCount'],'user'=>$l['user']]; } catch (Throwable $e) {}
+        }
+    }
+
+    $wsParams = array_merge(chatDefaultWsParams($config), $fetch['wsParams'], [
+        'room_id' => $fetch['roomId'] ?? $roomId ?? '',
+        'cursor' => $fetch['cursor'],
+        'internal_ext' => $fetch['internalExt'],
+        'compress' => '', // empty = no gzip, simpler for browser JS (no pako needed)
+    ]);
+    // Euler may already include cursor/internal_ext in wsParams; ensure ours win
+    $finalUrl = $fetch['wsUrl'];
+    if ($finalUrl) {
+        $finalUrl .= '?' . http_build_query($wsParams, '', '&', PHP_QUERY_RFC3986) . '&version_code=270000';
+    }
+
+    echo json_encode([
+        'success' => true,
+        'data' => [
+            'username' => $username ?: $uniqueIdForEuler,
+            'room_id' => $fetch['roomId'] ?? $roomId,
+            'wsUrl' => $fetch['wsUrl'],
+            'wsParams' => $fetch['wsParams'],
+            'cursor' => $fetch['cursor'],
+            'internalExt' => $fetch['internalExt'],
+            'heartBeatDuration' => $fetch['heartBeatDuration'],
+            'needsAck' => $fetch['needsAck'],
+            'finalWsUrl' => $finalUrl,
+            'history' => $history,
+        ]
+    ], JSON_PRETTY_PRINT);
+}
+
+function chatDefaultWsParams(array $config): array
+{
+    return [
+        'version_code' => '180800',
+        'aid' => '1988',
+        'app_language' => 'en',
+        'app_name' => 'tiktok_web',
+        'browser_platform' => 'Win32',
+        'browser_language' => 'en-DE',
+        'browser_name' => 'Mozilla',
+        'browser_version' => '5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+        'browser_online' => 'true',
+        'cookie_enabled' => 'true',
+        'tz_name' => 'Europe/Berlin',
+        'device_platform' => 'web',
+        'identity' => 'audience',
+        'live_id' => '12',
+        'webcast_language' => 'en',
+        'ws_direct' => '0',
+        'sup_ws_ds_opt' => '1',
+        'update_version_code' => '2.0.0',
+        'did_rule' => '3',
+        'screen_height' => '1080',
+        'screen_width' => '1920',
+        'heartbeat_duration' => '0',
+        'resp_content_type' => 'protobuf',
+        'history_comment_count' => '6',
+        'client_enter' => '1',
+        'last_rtt' => (string)(100 + random_int(0, 100)),
+    ];
+}
+
+function chatEulerFetch(array $config, ?string $roomId, ?string $uniqueId): array
+{
+    $signApiKey = $config['chat']['sign_api_key'] ?? '';
+    $signApiBase = $config['chat']['sign_api_base'] ?? 'https://tiktok.eulerstream.com';
+    // env overrides
+    $envKey = getenv('SIGN_API_KEY');
+    if (is_string($envKey) && $envKey !== '') $signApiKey = $envKey;
+    $envBase = getenv('SIGN_API_URL');
+    if (is_string($envBase) && $envBase !== '') $signApiBase = $envBase;
+
+    $params = [
+        'client' => 'ttlive-php',
+        'user_agent' => $config['tiktok']['user_agent'] ?? 'Mozilla/5.0',
+        'client_enter' => 'true',
+        'platform' => 'web',
+    ];
+    if ($roomId !== null && $roomId !== '') $params['room_id'] = $roomId;
+    elseif ($uniqueId !== null && $uniqueId !== '') $params['unique_id'] = $uniqueId;
+    else return ['success'=>false,'error'=>'Bad Request','message'=>'room_id or uniqueId required','http_code'=>400];
+    if (!empty($signApiKey)) $params['apiKey'] = $signApiKey;
+
+    $url = rtrim($signApiBase, '/') . '/webcast/fetch?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+
+    $headers = [
+        'User-Agent: tiktok-live-php/0.1.0 php-' . PHP_VERSION,
+        'Accept: application/protobuf, application/octet-stream, */*',
+        'Referer: https://www.tiktok.com/',
+        'Origin: https://www.tiktok.com',
+        'Accept-Encoding: gzip, deflate',
+    ];
+    if (!empty($signApiKey)) $headers[] = 'x-api-key: ' . $signApiKey;
+
+    $ch = curl_init();
+    $respHeaders = [];
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_TIMEOUT => $config['tiktok']['timeout'] ?? 10,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_SSL_VERIFYPEER => ($config['ssl']['verify_peer'] ?? false),
+        CURLOPT_SSL_VERIFYHOST => ($config['ssl']['verify_host'] ?? false) ? 2 : 0,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_HEADERFUNCTION => function($ch, $header) use (&$respHeaders) {
+            $len = strlen($header);
+            $parts = explode(':', $header, 2);
+            if (count($parts) === 2) {
+                $k = strtolower(trim($parts[0]));
+                $v = trim($parts[1]);
+                $respHeaders[$k][] = $v;
+            }
+            return $len;
+        },
+    ]);
+    if (!empty($config['ssl']['ca_bundle'])) curl_setopt($ch, CURLOPT_CAINFO, $config['ssl']['ca_bundle']);
+    if (!empty($config['proxy'])) curl_setopt($ch, CURLOPT_PROXY, $config['proxy']);
+
+    $body = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+
+    if ($body === false) {
+        return ['success'=>false,'error'=>'Upstream error','message'=>'Euler fetch failed: '.$curlErr,'http_code'=>502];
+    }
+    if ($httpCode === 429) {
+        $msg = 'Sign-server rate-limited (429). Set chat.sign_api_key in config.php or SIGN_API_KEY env.';
+        // try to extract json message
+        $j = json_decode($body, true);
+        if (isset($j['message'])) $msg = $j['message'];
+        return ['success'=>false,'error'=>'Rate limited','message'=>$msg,'http_code'=>429,'details'=>substr($body,0,400)];
+    }
+    if ($httpCode === 402) {
+        return ['success'=>false,'error'=>'Payment required','message'=>'Euler premium required (402)','http_code'=>402,'details'=>substr($body,0,400)];
+    }
+    if ($httpCode !== 200) {
+        $snippet = substr($body, 0, 500);
+        // if body is json, show message
+        $j = json_decode($body, true);
+        $msg = $j['message'] ?? "Sign-server returned HTTP $httpCode";
+        return ['success'=>false,'error'=>'Upstream error','message'=>$msg,'http_code'=>$httpCode,'details'=>$snippet];
+    }
+    // body should be protobuf; if it looks like json error, handle
+    if (str_starts_with(ltrim($body), '{')) {
+        $j = json_decode($body, true);
+        if (isset($j['message'])) {
+            return ['success'=>false,'error'=>'Upstream error','message'=>$j['message'],'http_code'=>502,'details'=>substr($body,0,500)];
+        }
+    }
+    if (substr($body, 0, 3) === "\x1f\x8b\x08") {
+        $decoded = @gzdecode($body);
+        if ($decoded !== false) $body = $decoded;
+    }
+    // x-room-id header may contain canonical roomId
+    $roomIdHeader = $respHeaders['x-room-id'][0] ?? $respHeaders['x-room_id'][0] ?? null;
+    // x-set-tt-cookie ignored for browser WS (cookies are for TikTok domain)
+
+    try {
+        $fetch = TikTokCodec::decodeFetchResult($body);
+    } catch (Throwable $e) {
+        return ['success'=>false,'error'=>'Decode error','message'=>'Failed to decode Euler protobuf: '.$e->getMessage(),'http_code'=>502,'details'=>bin2hex(substr($body,0,32))];
+    }
+    if ($roomIdHeader) $fetch['roomId'] = $roomIdHeader;
+
+    // sanity: wsUrl must be present
+    if (empty($fetch['wsUrl'])) {
+        return ['success'=>false,'error'=>'Upstream error','message'=>'Euler returned empty wsUrl (room offline or invalid id)','http_code'=>502,'details'=>json_encode($fetch)];
+    }
+
+    return ['success'=>true,'fetch'=>$fetch,'headers'=>$respHeaders,'http_code'=>200];
 }
 
 function httpRequest(array $config, string $url, ?string $method = 'GET', ?string $cookieHeader = null): ?string

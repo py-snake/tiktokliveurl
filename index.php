@@ -520,6 +520,23 @@ if ($authed) {
             color: var(--text-muted);
             font-size: 0.8rem;
         }
+
+        /* Live chat (php+js WSS) */
+        .chat-section { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+        .chat-feed { max-height: 260px; overflow-y: auto; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; font-size: 0.85rem; line-height: 1.4; }
+        .chat-feed:empty::before { content: "No messages yet — connect to start streaming."; color: var(--text-muted); font-size: 0.8rem; }
+        .chat-msg { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+        .chat-msg:last-child { border-bottom: none; }
+        .chat-user { font-weight: 700; color: #25f4ee; }
+        .chat-text { color: var(--text-primary); word-break: break-word; }
+        .chat-gift { color: #ffb86b; }
+        .chat-like { color: #ff7ab6; }
+        .chat-status { font-size: 0.75rem; color: var(--text-muted); margin-left: 6px; }
+        .chat-status.live { color: var(--success); }
+        .chat-status.err { color: var(--accent); }
+        .btn-chat { background: #1a7a6a; color: #fff; }
+        .btn-chat:hover { background: #1e9e86; }
+        .btn-chat.live { background: var(--accent); }
     </style>
 </head>
 <body>
@@ -972,6 +989,18 @@ if ($authed) {
             }
             bodyContent += '</div>';
 
+            // php+js live chat (browser WSS, php mints signed URL)
+            bodyContent += `
+                <div class="chat-section" data-chat="${escAttr(username)}">
+                    <div class="url-label">Live Chat <span class="chat-status" id="chat-status-${escAttr(username)}">— idle</span></div>
+                    <div class="chat-feed" id="chat-feed-${escAttr(username)}"></div>
+                    <div style="display:flex;gap:6px;margin-top:6px">
+                        <button class="btn btn-chat" style="padding:6px 12px;font-size:0.8rem" onclick="toggleChat('${escAttr(username)}')" id="chat-btn-${escAttr(username)}">Connect Chat</button>
+                        <button class="btn btn-secondary" style="padding:6px 12px;font-size:0.8rem" onclick="clearChat('${escAttr(username)}')">Clear</button>
+                    </div>
+                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px">PHP mints signed <code>wss://</code> via <code>api.php?action=chat_token</code>; browser streams comments/gifts/likes. Free Euler tier ~10/day/IP.</div>
+                </div>`;
+
             bodyContent += '<div class="card-actions">';
             bodyContent += `<button class="btn-remove" onclick="removeProfile('${escAttr(username)}')">Remove</button></div>`;
 
@@ -1337,6 +1366,156 @@ function renderUrlGroup(label, url, warning) {
         toast.textContent = msg;
         toast.classList.add('show');
         setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    // ---------- Live Chat: php+js WSS (browser streams, php mints signed url) ----------
+    const chatSockets = {}; // username -> {ws, roomId, hbTimer, closed}
+    function clearChat(username){ const el=document.getElementById('chat-feed-'+username); if(el) el.innerHTML=''; }
+    function setChatStatus(username, text, cls){
+        const el=document.getElementById('chat-status-'+username);
+        if(!el) return; el.textContent=text; el.className='chat-status '+(cls||'');
+    }
+    function appendChat(username, html){
+        const feed=document.getElementById('chat-feed-'+username);
+        if(!feed) return; const div=document.createElement('div'); div.innerHTML=html;
+        // cap 300 msgs
+        feed.appendChild(div.firstElementChild || div);
+        while(feed.children.length>300) feed.removeChild(feed.firstChild);
+        feed.scrollTop=feed.scrollHeight;
+    }
+    async function toggleChat(username){
+        const cur=chatSockets[username];
+        if(cur && cur.ws && cur.ws.readyState===WebSocket.OPEN){
+            try{ cur.ws.close(); }catch{}; setChatStatus(username,'— idle',''); document.getElementById('chat-btn-'+username).textContent='Connect Chat';
+            return;
+        }
+        await connectChat(username);
+    }
+    // minimal protobuf reader/writer/codec (ported from tiktok_codec.php)
+    class WsReader{ constructor(u8){this.buf=u8;this.pos=0} eof(){return this.pos>=this.buf.length} readVarint(){let r=0,s=0;for(;;){if(this.pos>=this.buf.length) throw new Error('trunc varint');const b=this.buf[this.pos++];r|=(b&0x7F)<<s;if((b&0x80)===0) break; s+=7; if(s>63) throw new Error('varint too long')}return r>>>0} readTag(){if(this.eof()) return null;const t=this.readVarint();return [t>>>3, t&7]} readBytes(){const l=this.readVarint(); if(this.pos+l>this.buf.length) throw new Error('trunc bytes'); const sl=this.buf.slice(this.pos,this.pos+l); this.pos+=l; return sl} readString(){return new TextDecoder().decode(this.readBytes())} skip(w){ switch(w){case 0:this.readVarint();return;case 1:this.pos+=8;return;case 2:{const l=this.readVarint();this.pos+=l;return}case 5:this.pos+=4;return;default:throw new Error('wire '+w)}} walk(cb){while(!this.eof()){const tag=this.readTag();if(!tag) return;const [f,w]=tag;const before=this.pos; if(cb(f,w,this)===false){this.pos=before; this.skip(w)}}} }
+    class WsWriter{ constructor(){this.b=[]} getBytes(){return new Uint8Array(this.b)} _wVar(v){v>>>=0; while(v>0x7F){this.b.push((v&0x7F)|0x80); v>>>=7} this.b.push(v&0x7F)} writeTag(f,w){this._wVar((f<<3)|w)} writeVarintField(f,v){this.writeTag(f,0); this._wVar(v)} writeStringField(f,s){const e=new TextEncoder().encode(s); this.writeTag(f,2); this._wVar(e.length); for(const x of e) this.b.push(x)} writeBytesField(f,bytes){ this.writeTag(f,2); this._wVar(bytes.length); for(const x of bytes) this.b.push(x)} writeInt64StringField(f,s){ const v=parseInt(s||'0',10)||0; this.writeVarintField(f,v)} }
+    const WsCodec={
+        decodeStringMapEntry(bytes){
+            let k='',v=''; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===1) k=r.readString(); else if(f===2) v=r.readString(); else return false; return true}); return [k,v];
+        },
+        decodePushFrame(u8){
+            const o={seqId:'0',logId:'0',payloadEncoding:'',payloadType:'',payload:new Uint8Array(), headers:{}};
+            (new WsReader(u8)).walk((f,w,r)=>{ switch(f){case 1:o.seqId=String(r.readVarint());return true; case 2:o.logId=String(r.readVarint());return true; case 5:{const e=r.readBytes(); const [k,v]=WsCodec.decodeStringMapEntry(e); o.headers[k]=v; return true} case 6:o.payloadEncoding=r.readString();return true; case 7:o.payloadType=r.readString();return true; case 8:o.payload=r.readBytes();return true; default:return false}});
+            return o;
+        },
+        decodeBaseProto(bytes){ let t='',p=new Uint8Array(); (new WsReader(bytes)).walk((f,w,r)=>{ if(f===1) t=r.readString(); else if(f===2) p=r.readBytes(); else return false; return true}); return {type:t, payload:p}},
+        decodeFetchResult(u8){
+            const o={messages:[], cursor:'', internalExt:'', wsUrl:'', wsParams:{}, needsAck:false, heartBeatDuration:0};
+            (new WsReader(u8)).walk((f,w,r)=>{
+                switch(f){ case 1:o.messages.push(WsCodec.decodeBaseProto(r.readBytes())); return true; case 2:o.cursor=r.readString(); return true; case 5:o.internalExt=r.readString(); return true; case 7:{const [k,v]=WsCodec.decodeStringMapEntry(r.readBytes()); o.wsParams[k]=v; return true} case 8:o.heartBeatDuration=r.readVarint(); return true; case 9:o.needsAck=r.readVarint()!==0; return true; case 10:o.wsUrl=r.readString(); return true; default:return false}
+            }); return o;
+        },
+        decodeUser(bytes){
+            let o={userId:'0',nickname:'',uniqueId:''}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===1) o.userId=String(r.readVarint()); else if(f===3) o.nickname=r.readString(); else if(f===38) o.uniqueId=r.readString(); else return false; return true}); return o;
+        },
+        decodeChat(bytes){ let o={comment:'', user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===3) o.comment=r.readString(); else return false; return true}); return o; },
+        decodeGift(bytes){ let o={giftId:0,repeatCount:0,repeatEnd:0,user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.giftId=r.readVarint(); else if(f===5) o.repeatCount=r.readVarint(); else if(f===7) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===9) o.repeatEnd=r.readVarint(); else return false; return true}); return o; },
+        decodeLike(bytes){ let o={likeCount:0,totalLikeCount:0,user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.likeCount=r.readVarint(); else if(f===3) o.totalLikeCount=r.readVarint(); else if(f===5) o.user=WsCodec.decodeUser(r.readBytes()); else return false; return true}); return o; },
+        encodeHeartbeat(roomId){ const w=new WsWriter(); if(roomId && roomId!=='0') w.writeInt64StringField(1,roomId); w.writeInt64StringField(2,'1'); return w.getBytes(); },
+        encodePushFrame(type, payload, enc='pb', logId='0'){ const w=new WsWriter(); if(logId!=='0'&&logId!=='') w.writeInt64StringField(2,logId); if(enc) w.writeStringField(6,enc); if(type) w.writeStringField(7,type); if(payload && payload.length) w.writeBytesField(8,payload); return w.getBytes(); }
+    };
+    async function decompressGzip(u8){
+        // no gzip in our MVP (compress=''), but handle if server still gzips
+        if(u8[0]===0x1f && u8[1]===0x8b && u8[2]===0x08){
+            if(typeof DecompressionStream!=='undefined'){
+                const ds=new DecompressionStream('gzip'); const w=ds.writable.getWriter(); w.write(u8); w.close(); const chunks=[]; const r=ds.readable.getReader(); for(;;){ const {value,done}=await r.read(); if(done) break; chunks.push(value)} const total=chunks.reduce((a,c)=>a+c.length,0); const out=new Uint8Array(total); let o=0; for(const c of chunks){ out.set(c,o); o+=c.length} return out;
+            }
+            // fallback: try pako if loaded
+            if(window.pako) return window.pako.ungzip(u8);
+        }
+        return u8;
+    }
+
+    async function connectChat(username){
+        const btn=document.getElementById('chat-btn-'+username);
+        const feed=document.getElementById('chat-feed-'+username);
+        if(!btn||!feed) return;
+        btn.disabled=true; btn.textContent='Fetching token…'; setChatStatus(username,'fetching…','');
+        try{
+            const data=await apiCall('chat_token', { username });
+            if(!data || !data.success){
+                const msg=data?.message||'chat_token failed';
+                setChatStatus(username, 'error: '+msg, 'err'); showToast(msg); btn.disabled=false; btn.textContent='Connect Chat'; return;
+            }
+            const d=data.data;
+            // render history (already decoded by php)
+            if(Array.isArray(d.history)){
+                for(const h of d.history){
+                    if(h.type==='chat') appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(h.user?.uniqueId||h.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(h.comment)}</span></div>`);
+                    else if(h.type==='gift') appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(h.user?.uniqueId||'?')} gift ${h.giftId} ×${h.repeatCount}</div>`);
+                    else if(h.type==='like') appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(h.user?.uniqueId||'?')} +${h.likeCount}</div>`);
+                }
+            }
+            const wsUrl=d.finalWsUrl || d.wsUrl;
+            if(!wsUrl){ setChatStatus(username,'no wsUrl','err'); btn.disabled=false; btn.textContent='Connect Chat'; return; }
+            setChatStatus(username,'connecting…',''); btn.textContent='Connecting…';
+            const ws=new WebSocket(wsUrl);
+            ws.binaryType='arraybuffer';
+            const rec={ws, roomId: d.room_id, hbTimer:null, closed:false};
+            chatSockets[username]=rec;
+            ws.onopen=()=>{
+                setChatStatus(username,'live ✓','live'); btn.textContent='Disconnect'; btn.disabled=false; btn.classList.add('live');
+                appendChat(username, `<div class="chat-msg" style="color:var(--text-muted);font-size:0.75rem">Connected to room ${escHtml(d.room_id)} — streaming…</div>`);
+                // heartbeat + ack
+                const hbMs=(d.heartBeatDuration>0? d.heartBeatDuration:10000);
+                if(hbMs){
+                    const hbPayload=WsCodec.encodeHeartbeat(d.room_id||'');
+                    const hbFrame=WsCodec.encodePushFrame('hb', hbPayload);
+                    rec.hbTimer=setInterval(()=>{ try{ if(ws.readyState===1) ws.send(hbFrame); }catch{} }, hbMs);
+                }
+                if(d.needsAck && d.internalExt){
+                    try{
+                        const ackFrame=WsCodec.encodePushFrame('ack', new TextEncoder().encode(d.internalExt));
+                        ws.send(ackFrame);
+                    }catch{}
+                }
+            };
+            ws.onmessage=async (ev)=>{
+                try{
+                    let u8; if(ev.data instanceof ArrayBuffer) u8=new Uint8Array(ev.data); else if(ev.data instanceof Uint8Array) u8=ev.data; else if(ev.data instanceof Blob) u8=new Uint8Array(await ev.data.arrayBuffer()); else return;
+                    // outer PushFrame
+                    const frame=WsCodec.decodePushFrame(u8);
+                    // decompress payload if gzipped
+                    let payload=frame.payload;
+                    if(payload && payload.length){
+                        payload=await decompressGzip(payload);
+                    } else if(frame.payloadType==='msg' && !payload.length){
+                        return;
+                    }
+                    // payload should be FetchResult
+                    if(frame.payloadType==='msg' || (payload && payload.length)){
+                        let fetchRes;
+                        try{ fetchRes=WsCodec.decodeFetchResult(payload); }catch{ return; }
+                        for(const m of fetchRes.messages){
+                            if(m.type==='WebcastChatMessage'){
+                                const c=WsCodec.decodeChat(m.payload);
+                                appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(c.user?.uniqueId||c.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(c.comment)}</span></div>`);
+                            } else if(m.type==='WebcastGiftMessage'){
+                                const g=WsCodec.decodeGift(m.payload);
+                                if(g.repeatEnd!==0 || g.giftId) appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(g.user?.uniqueId||'?')} gift ${g.giftId} ×${g.repeatCount}</div>`);
+                            } else if(m.type==='WebcastLikeMessage'){
+                                const l=WsCodec.decodeLike(m.payload);
+                                appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(l.user?.uniqueId||'?')} +${l.likeCount}</div>`);
+                            }
+                        }
+                    }
+                }catch(e){ console.warn('chat decode',e); }
+            };
+            ws.onclose=(ev)=>{
+                if(rec.hbTimer) clearInterval(rec.hbTimer);
+                rec.closed=true; delete chatSockets[username];
+                const st=ev.code===1000? 'closed':'disconnected ('+ev.code+')';
+                setChatStatus(username, st, 'err'); btn.textContent='Connect Chat'; btn.classList.remove('live'); btn.disabled=false;
+            };
+            ws.onerror=()=>{ setChatStatus(username,'ws error','err'); };
+        }catch(e){
+            console.error(e); setChatStatus(username,'error','err'); showToast('Chat connect failed'); btn.disabled=false; btn.textContent='Connect Chat';
+        }
     }
 
     function escHtml(s) {
