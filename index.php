@@ -1002,6 +1002,7 @@ if ($authed) {
                 </div>`;
 
             bodyContent += '<div class="card-actions">';
+            bodyContent += `<a class="btn btn-primary" href="watch.php?username=${encodeURIComponent(username)}&token=${encodeURIComponent(TOKEN)}" target="_blank" rel="noopener" title="Open theater — video left, chat right">Watch</a>`;
             bodyContent += `<button class="btn-remove" onclick="removeProfile('${escAttr(username)}')">Remove</button></div>`;
 
         } else if (is_live) {
@@ -1078,6 +1079,7 @@ function renderUrlGroup(label, url, warning) {
             playBtnHtml = `<button id="${btnId}" class="btn-play" onclick="openPlayer('${escAttr(url)}', '${kind}')" title="Play via proxy (may 403 on serv00 — use mpv if fails)">Play</button>`;
         }
 
+        const watchHref = `watch.php?url=${encodeURIComponent(url)}&token=${encodeURIComponent(TOKEN)}`;
         return `
             <div class="url-group">
                 <div class="url-label">${escHtml(label)}</div>
@@ -1085,6 +1087,7 @@ function renderUrlGroup(label, url, warning) {
                     <input class="url-input" type="text" readonly value="${escAttr(url)}" onclick="this.select()">
                     <button class="btn-mpv" style="background:#555" onclick="copyUrl(this, '${escAttr(mpvCmd)}')" title="Copy mpv command">mpv</button>
                     ${playBtnHtml}
+                    <a class="btn-open" href="${watchHref}" target="_blank" rel="noopener" title="Open theater — video + chat side-by-side">Watch</a>
                     <button class="btn-copy" onclick="copyUrl(this, '${escAttr(url)}')">Copy</button>
                 </div>
                 ${warningHtml}
