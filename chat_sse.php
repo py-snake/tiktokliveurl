@@ -209,7 +209,7 @@ $ttwid=fetchTtwidSse($config,$username ?: 'tiktok');
 if(!$ttwid){
     sse_send(['type'=>'error','message'=>'Failed to fetch ttwid (TikTok blocked IP or region)']); exit;
 }
-$wssUrl=buildWssUrl($cdnHost,$roomId,'en','US',false);
+$wssUrl=buildWssUrl($cdnHost,$roomId,'en','US',true);
 sse_comment('connecting to '.parse_url($wssUrl,PHP_URL_HOST));
 sse_send(['type'=>'status','message'=>'connecting to TikTok WSS','room_id'=>$roomId]);
 
@@ -246,7 +246,7 @@ try{
     $hbPayload = TikTokCodec::encodeHeartbeat($roomId);
     $hbFrame   = TikTokCodec::encodePushFrame('hb', $hbPayload);
     $enterPayload = method_exists('TikTokCodec','encodeEnterRoom') ? TikTokCodec::encodeEnterRoom($roomId) : $hbPayload;
-    $enterFrame   = TikTokCodec::encodePushFrame('enter', $enterPayload);
+    $enterFrame   = TikTokCodec::encodePushFrame('im_enter_room', $enterPayload);
 } catch(Throwable $e){ $hbPayload=''; $hbFrame=''; $enterFrame=''; }
 if(isset($hbFrame) && $hbFrame!=='') @fwrite($fp, wsEncode($hbFrame,0x2));
 if(isset($enterFrame) && $enterFrame!=='') @fwrite($fp, wsEncode($enterFrame,0x2));
@@ -309,18 +309,30 @@ while(!connection_aborted()){
             $ackFrame=TikTokCodec::encodePushFrame('ack', $ackPayload, 'pb', $pf['logId'] ?? '0');
             @fwrite($fp, wsEncode($ackFrame,0x2));
         }
+        // send raw counts for debugging (user sees if any msg arrives)
+        if(empty($respData['messages'])){
+            // no messages in this push — still heartbeat
+            sse_comment('msg empty '.strlen($pl).'B');
+        }
         foreach($respData['messages'] as $msg){
             $type=$msg['type'] ?? '';
             $pld=$msg['payload'] ?? '';
             if($type==='WebcastChatMessage'){
-                try{ $c=TikTokCodec::decodeChat($pld); sse_send(['type'=>'chat','user'=>$c['user'],'comment'=>$c['comment']]); }catch(Throwable $e){}
+                try{ $c=TikTokCodec::decodeChat($pld); sse_send(['type'=>'chat','user'=>$c['user'],'comment'=>$c['comment']]); }catch(Throwable $e){ sse_send(['type'=>'debug','message'=>'chat decode fail '.$e->getMessage()]);}
             } elseif($type==='WebcastGiftMessage'){
                 try{ $g=TikTokCodec::decodeGift($pld); sse_send(['type'=>'gift','giftId'=>$g['giftId'],'repeatCount'=>$g['repeatCount'],'repeatEnd'=>$g['repeatEnd'],'user'=>$g['user']]); }catch(Throwable $e){}
             } elseif($type==='WebcastLikeMessage'){
                 try{ $l=TikTokCodec::decodeLike($pld); sse_send(['type'=>'like','likeCount'=>$l['likeCount'],'totalLikeCount'=>$l['totalLikeCount'],'user'=>$l['user']]); }catch(Throwable $e){}
             } elseif($type==='WebcastMemberMessage'){
-                // join
-                sse_send(['type'=>'member','raw'=>$type]);
+                sse_send(['type'=>'member','user'=>['uniqueId'=>'?'],'comment'=>'joined']);
+            } elseif($type==='WebcastRoomUserSeqMessage'){
+                // viewer count — forward as status
+                // skip noise, but count for debug
+                sse_comment('viewer seq '.strlen($pld).'B');
+            } else {
+                // other types — show type for debug so user knows stream is alive
+                // comment to avoid chat spam, but data for console
+                sse_comment('other '.$type);
             }
         }
     }
