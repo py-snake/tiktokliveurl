@@ -40,6 +40,13 @@ if (function_exists('fastcgi_finish_request')) {
 
 require_once __DIR__ . '/tiktok_codec.php';
 
+// Tell EventSource to wait 12s between reconnects: serv00 allows only a
+// few concurrent PHP interpreters, and the chat run holds one for up to
+// ~280s — without this the browser would re-hit a fresh PHP run every ~3s
+// after each exit and starve proxy.php (stalling the video).
+echo "retry: 12000\n\n";
+@ob_flush(); @flush();
+
 function sse_send(array $data): void {
     echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) . "\n\n";
     @ob_flush(); @flush();

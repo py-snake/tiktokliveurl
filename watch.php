@@ -153,45 +153,125 @@ async function watchInit(){
   document.getElementById('watch-title').textContent=d.room?.title||`@${d.username} — LIVE`;
   document.getElementById('watch-viewers').textContent=d.room?`${fmt(d.room.viewer_count)} viewers • ${fmt(d.room.like_count)} likes`:'';
   document.getElementById('watch-badge').classList.add('live'); document.getElementById('watch-badge').style.display='inline-flex';
-  const urls=d.room?.stream_urls||{};
-  // pick best: FLV 720p > FLV 480p > HLS > any
-  let pick=null, kind='flv';
-  if(urls.flv){
-    pick=urls.flv['720p']||urls.flv['480p']||urls.flv['360p']||Object.values(urls.flv)[0];
-  }
-  if(!pick && urls.hls){ pick=urls.hls; kind='hls'; }
-  if(!pick && urls.qualities && urls.qualities.length){
-    const q0=urls.qualities[0]; pick=q0.hls||q0.flv; kind = q0.hls && q0.hls.includes('.m3u8') ? 'hls':'flv';
-  }
+  const pick=watchPickUrl(d.room?.stream_urls);
   if(!pick){ document.getElementById('watch-status').textContent='No stream URL available (TikTok returned empty). Try mpv or refresh.'; return; }
-  watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${pick}"`;
-  watchPlay(pick, kind);
+  watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${pick.url}"`;
+  watchPlay(pick.url, pick.kind);
   // auto-connect chat
   watchConnectChat();
 }
-function watchPlay(url, kind){
+let watchPlayGen=0;           // bumped per session; stale retries check this
+let watchRetryTimer=null;
+let watchWatchdogTimer=null;
+let watchCtx=null;            // {url, kind, attempt, gen}
+let watchLastT=-1, watchLastAdvance=Date.now();
+const WATCH_MAX_BACKOFF_MS=15000, WATCH_STALL_MS=20000;
+function watchStillActive(gen){ return gen===watchPlayGen; }
+function watchClearTimers(){
+  if(watchRetryTimer){ clearTimeout(watchRetryTimer); watchRetryTimer=null; }
+  if(watchWatchdogTimer){ clearInterval(watchWatchdogTimer); watchWatchdogTimer=null; }
+}
+function watchPickUrl(urls){
+  // best: FLV 720p > 480p > 360p > any FLV > HLS > qualities
+  if(!urls) return null;
+  if(urls.flv){
+    const f=urls.flv['720p']||urls.flv['480p']||urls.flv['360p']||Object.values(urls.flv)[0];
+    if(f) return {url:f, kind:'flv'};
+  }
+  if(urls.hls) return {url:urls.hls, kind:'hls'};
+  if(urls.qualities && urls.qualities.length){
+    const q0=urls.qualities[0]; const u=q0.hls||q0.flv;
+    if(u) return {url:u, kind:(q0.hls && q0.hls.includes('.m3u8'))?'hls':'flv'};
+  }
+  return null;
+}
+function watchScheduleReconnect(note){
+  const ctx=watchCtx;
+  if(!ctx || !watchStillActive(ctx.gen)) return;
+  const attempt=ctx.attempt+1;
+  const delay=Math.min(2000*attempt, WATCH_MAX_BACKOFF_MS);
+  watchClearTimers();
+  const status=document.getElementById('watch-status');
+  let msg=`Connection lost${note?' '+note:''} — retrying in ${Math.round(delay/1000)}s (attempt ${attempt})…`;
+  if(attempt>=5) msg+=' URLs may have expired — fetching fresh ones…';
+  if(status) status.textContent=msg;
+  watchCtx={url:ctx.url, kind:ctx.kind, attempt, gen:ctx.gen};
+  watchRetryTimer=setTimeout(()=>{
+    watchRetryTimer=null;
+    if(!watchStillActive(ctx.gen)) return;
+    watchReconnectAttempt(ctx.url, ctx.kind, attempt, ctx.gen);
+  }, delay);
+}
+async function watchReconnectAttempt(oldUrl, oldKind, attempt, gen){
+  if(!watchStillActive(gen)) return;
+  // reload = fresh signed URLs via api check (expire/sign rotate); fall back to same URL
+  let url=oldUrl, kind=oldKind;
+  try{
+    const u=USERNAME||watchRoom?.owner?.display_id||'';
+    if(u || ROOM_ID){
+      const data=await apiCall('check', u?{username:u}:{room_id:ROOM_ID});
+      if(data && data.success && !data.data.is_live){
+        const s=document.getElementById('watch-status');
+        if(s) s.textContent='Stream ended by host.';
+        document.getElementById('watch-badge').style.display='none';
+        return; // offline — stop retrying
+      }
+      const pick=watchPickUrl(data?.data?.room?.stream_urls);
+      if(pick){ url=pick.url; kind=pick.kind; watchRoom=data.data.room; }
+    }
+  }catch(e){ /* keep old URL */ }
+  watchPlay(url, kind, attempt, gen);
+}
+function watchArmWatchdog(){
+  const ctx=watchCtx;
+  if(!ctx) return;
+  if(watchWatchdogTimer){ clearInterval(watchWatchdogTimer); watchWatchdogTimer=null; }
+  watchLastT=-1; watchLastAdvance=Date.now();
+  const video=document.getElementById('watch-video');
+  watchWatchdogTimer=setInterval(()=>{
+    const c=watchCtx;
+    if(!c || !watchStillActive(c.gen) || !video){ clearInterval(watchWatchdogTimer); watchWatchdogTimer=null; return; }
+    if(video.paused || video.ended){ watchLastAdvance=Date.now(); return; }
+    const t=video.currentTime;
+    if(t!==watchLastT){ watchLastT=t; watchLastAdvance=Date.now(); return; }
+    if(Date.now()-watchLastAdvance > WATCH_STALL_MS) watchScheduleReconnect('(stalled)');
+  }, 5000);
+}
+function watchPlay(url, kind, attempt, gen){
+  if(gen===undefined){ watchPlayGen+=1; gen=watchPlayGen; attempt=attempt||1; }
+  if(!watchStillActive(gen)) return;
   if(!kind) kind = /\.m3u8(\?|$)/i.test(url) ? 'hls':'flv';
   const video=document.getElementById('watch-video');
   const status=document.getElementById('watch-status');
-  if(window.__hls) try{window.__hls.destroy()}catch{}
-  if(window.__flv) try{window.__flv.destroy()}catch{}
+  watchClearTimers();
+  if(window.__hls){ try{window.__hls.destroy()}catch{} window.__hls=null; }
+  if(window.__flv){ try{window.__flv.destroy()}catch{} window.__flv=null; }
   video.pause(); video.removeAttribute('src'); video.load();
-  status.textContent='Loading…';
+  video.onended=()=>{ if(watchStillActive(gen)) watchScheduleReconnect('(ended)'); };
+  watchCtx={url, kind, attempt, gen};
+  if(attempt>1 && status) status.textContent=`Reconnecting (attempt ${attempt})…`;
+  else if(status) status.textContent='Loading…';
   const src=proxyUrl(url);
   if(kind==='hls'){
     if(window.Hls && Hls.isSupported()){
       const hls=new Hls(); window.__hls=hls;
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{ status.textContent=''; video.play().catch(()=>{}); });
-      hls.on(Hls.Events.ERROR,(e,d)=>{ if(d.fatal) status.textContent=`Playback error: ${d.details||d.type}`; });
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{ if(!watchStillActive(gen)) return; status.textContent=''; watchLastAdvance=Date.now(); video.play().catch(()=>{}); });
+      hls.on(Hls.Events.ERROR,(e,d)=>{ if(!d.fatal || !watchStillActive(gen)) return; try{hls.destroy()}catch{} window.__hls=null; watchScheduleReconnect(); });
       hls.loadSource(src); hls.attachMedia(video);
+      watchArmWatchdog();
     } else if(video.canPlayType('application/vnd.apple.mpegurl')){
-      video.src=src; video.addEventListener('loadedmetadata',()=>{status.textContent=''; video.play().catch(()=>{})},{once:true});
+      video.src=src; video.addEventListener('loadedmetadata',()=>{ if(!watchStillActive(gen)) return; status.textContent=''; watchLastAdvance=Date.now(); video.play().catch(()=>{}); },{once:true});
+      video.addEventListener('error',()=>{ if(watchStillActive(gen)) watchScheduleReconnect(); });
+      watchArmWatchdog();
     } else status.textContent='HLS not supported';
   } else {
     if(window.flvjs && flvjs.isSupported()){
       const p=flvjs.createPlayer({type:'flv',url:src,isLive:true}); window.__flv=p;
-      p.attachMediaElement(video); p.on(flvjs.Events.ERROR,(t,d)=> status.textContent=`FLV error: ${t} ${d||''}`);
+      p.attachMediaElement(video);
+      p.on(flvjs.Events.ERROR,(t,d)=>{ if(!watchStillActive(gen)) return; try{p.destroy()}catch{} window.__flv=null; watchScheduleReconnect(`${t} ${d||''}`.trim()); });
       p.load(); p.play().catch(()=>{}); status.textContent='';
+      watchLastAdvance=Date.now();
+      watchArmWatchdog();
     } else status.textContent='FLV not supported';
   }
   watchMpv=`mpv --referrer="https://www.tiktok.com/" --user-agent="${VLC_UA}" "${url}"`;
