@@ -284,9 +284,10 @@ if ($authed) {
             margin-bottom: 4px;
             font-weight: 600;
         }
-        .url-row { display: flex; gap: 6px; align-items: stretch; }
+        .url-row { display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap; }
         .url-input {
-            flex: 1;
+            flex: 1 1 180px;
+            min-width: 0;
             padding: 10px 12px;
             background: var(--bg-primary);
             border: 1px solid var(--border);
@@ -296,6 +297,16 @@ if ($authed) {
             font-family: 'SF Mono', Monaco, monospace;
             overflow-x: auto;
             white-space: nowrap;
+        }
+        @media (max-width: 480px) {
+            .url-input { flex-basis: 100%; }
+            .url-row .btn-mpv, .url-row .btn-play, .url-row .btn-open, .url-row .btn-copy {
+                flex: 1 1 0;
+                justify-content: center;
+                padding: 8px 6px;
+                font-size: 0.75rem;
+                min-width: 0;
+            }
         }
         .btn-copy {
             padding: 10px 14px;
@@ -455,6 +466,11 @@ if ($authed) {
             margin-top: 12px;
             padding-top: 12px;
             border-top: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        @media (max-width: 480px) {
+            .card-actions .btn { flex: 1 1 auto; justify-content: center; }
+            .btn-remove { margin-left: 0; flex: 1 1 auto; text-align: center; }
         }
         .btn-remove {
             margin-left: auto;
