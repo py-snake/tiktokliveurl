@@ -30,10 +30,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .layout{display:flex;height:calc(100vh - 48px);overflow:hidden}
-.video-pane{flex:1 1 68%;background:#000;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.video-pane{flex:1 1 68%;background:#000;display:flex;flex-direction:column;min-width:0;overflow:hidden;position:relative}
 #watch-video{width:100%;flex:1;min-height:0;background:#000;display:block;object-fit:contain}
-.video-bar{padding:8px 12px;background:var(--card);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:0.85rem;color:var(--muted)}
-.video-bar .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
 .btn{padding:8px 14px;border:none;border-radius:var(--rs);font-weight:600;cursor:pointer;font-size:0.85rem}
 .btn-primary{background:var(--accent);color:#fff}
 .btn-secondary{background:var(--border);color:var(--text)}
@@ -53,7 +51,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .chat-gift{color:#ffb86b}
 .chat-like{color:#ff7ab6}
 .chat-actions{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px}
-#watch-status{padding:8px 12px;font-size:0.8rem;color:var(--muted);min-height:1.2em;border-top:1px solid var(--border)}
+#watch-status{position:absolute;left:0;right:0;bottom:0;padding:6px 12px;font-size:0.8rem;color:var(--muted);background:rgba(0,0,0,.65);pointer-events:none}
+#watch-status:empty{display:none}
 .note{padding:8px 12px;font-size:0.75rem;color:var(--muted);border-top:1px solid var(--border)}
 .note code{background:var(--bg);padding:1px 4px;border-radius:4px}
 </style>
