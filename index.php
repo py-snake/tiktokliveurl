@@ -547,6 +547,7 @@ if ($authed) {
         .chat-text { color: var(--text-primary); word-break: break-word; }
         .chat-gift { color: #ffb86b; }
         .chat-like { color: #ff7ab6; }
+        .chat-join, .chat-follow, .chat-share { color: var(--text-secondary); font-size: 0.8rem; font-style: italic; }
         .chat-status { font-size: 0.75rem; color: var(--text-muted); margin-left: 6px; }
         .chat-status.live { color: var(--success); }
         .chat-status.err { color: var(--accent); }
@@ -1433,6 +1434,8 @@ function renderUrlGroup(label, url, warning, usernameForWatch) {
         decodeChat(bytes){ let o={comment:'', user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===3) o.comment=r.readString(); else return false; return true}); return o; },
         decodeGift(bytes){ let o={giftId:0,repeatCount:0,repeatEnd:0,user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.giftId=r.readVarint(); else if(f===5) o.repeatCount=r.readVarint(); else if(f===7) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===9) o.repeatEnd=r.readVarint(); else return false; return true}); return o; },
         decodeLike(bytes){ let o={likeCount:0,totalLikeCount:0,user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.likeCount=r.readVarint(); else if(f===3) o.totalLikeCount=r.readVarint(); else if(f===5) o.user=WsCodec.decodeUser(r.readBytes()); else return false; return true}); return o; },
+        decodeMember(bytes){ let o={memberCount:0,action:0,user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===3) o.memberCount=r.readVarint(); else if(f===10) o.action=r.readVarint(); else return false; return true}); return o; },
+        decodeSocial(bytes){ let o={shareType:0,action:0,shareTarget:'',user:null}; (new WsReader(bytes)).walk((f,w,r)=>{ if(f===2) o.user=WsCodec.decodeUser(r.readBytes()); else if(f===3) o.shareType=r.readVarint(); else if(f===4) o.action=r.readVarint(); else if(f===5) o.shareTarget=r.readString(); else return false; return true}); return o; },
         encodeHeartbeat(roomId){ const w=new WsWriter(); if(roomId && roomId!=='0') w.writeInt64StringField(1,roomId); w.writeInt64StringField(2,'1'); return w.getBytes(); },
         encodePushFrame(type, payload, enc='pb', logId='0'){ const w=new WsWriter(); if(logId!=='0'&&logId!=='') w.writeInt64StringField(2,logId); if(enc) w.writeStringField(6,enc); if(type) w.writeStringField(7,type); if(payload && payload.length) w.writeBytesField(8,payload); return w.getBytes(); }
     };
@@ -1470,6 +1473,9 @@ function renderUrlGroup(label, url, warning, usernameForWatch) {
                     if(data.type==='chat') appendChat(username, `<div class="chat-msg"><span class="chat-user">${escHtml(data.user?.uniqueId||data.user?.nickname||'?')}</span>: <span class="chat-text">${escHtml(data.comment)}</span></div>`);
                     else if(data.type==='gift') appendChat(username, `<div class="chat-msg chat-gift">🎁 ${escHtml(data.user?.uniqueId||'?')} gift ${data.giftId} ×${data.repeatCount||1}</div>`);
                     else if(data.type==='like') appendChat(username, `<div class="chat-msg chat-like">❤️ ${escHtml(data.user?.uniqueId||'?')} +${data.likeCount||1}</div>`);
+                    else if(data.type==='join'||data.type==='member') appendChat(username, `<div class="chat-msg chat-join">👋 ${escHtml(data.user?.uniqueId||data.user?.nickname||'?')} joined</div>`);
+                    else if(data.type==='follow') appendChat(username, `<div class="chat-msg chat-follow">➕ ${escHtml(data.user?.uniqueId||data.user?.nickname||'?')} followed</div>`);
+                    else if(data.type==='share') appendChat(username, `<div class="chat-msg chat-share">🔁 ${escHtml(data.user?.uniqueId||data.user?.nickname||'?')} shared the live</div>`);
                     else if(data.type==='connected') setChatStatus(username,'live ✓','live');
                     else if(data.type==='status') setChatStatus(username, data.message, '');
                     else if(data.type==='error'){ setChatStatus(username,'error: '+(data.message||'error'),'err'); appendChat(username, `<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">${escHtml(data.message||'error')}</div>`); showToast(data.message||'Chat error'); }

@@ -624,6 +624,15 @@ function handleChatToken(array $config): void
             try { $g = TikTokCodec::decodeGift($m['payload']); $history[] = ['type'=>'gift','giftId'=>$g['giftId'],'repeatCount'=>$g['repeatCount'],'repeatEnd'=>$g['repeatEnd'],'user'=>$g['user']]; } catch (Throwable $e) {}
         } elseif ($m['type'] === 'WebcastLikeMessage') {
             try { $l = TikTokCodec::decodeLike($m['payload']); $history[] = ['type'=>'like','likeCount'=>$l['likeCount'],'totalLikeCount'=>$l['totalLikeCount'],'user'=>$l['user']]; } catch (Throwable $e) {}
+        } elseif ($m['type'] === 'WebcastMemberMessage') {
+            try { $mm = TikTokCodec::decodeMember($m['payload']); $history[] = ['type'=>'join','user'=>$mm['user'],'memberCount'=>$mm['memberCount']]; } catch (Throwable $e) {}
+        } elseif ($m['type'] === 'WebcastSocialMessage') {
+            try {
+                $s = TikTokCodec::decodeSocial($m['payload']);
+                $a = (int)($s['action'] ?? 0);
+                if ($a === 1) $history[] = ['type'=>'follow','user'=>$s['user']];
+                elseif ($a >= 2 && $a <= 5) $history[] = ['type'=>'share','user'=>$s['user'],'shareTarget'=>$s['shareTarget'] ?? ''];
+            } catch (Throwable $e) {}
         }
     }
 

@@ -50,6 +50,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .chat-text{color:var(--text);word-break:break-word}
 .chat-gift{color:#ffb86b}
 .chat-like{color:#ff7ab6}
+.chat-join,.chat-follow,.chat-share{color:var(--muted);font-size:0.8rem;font-style:italic}
 .chat-actions{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px}
 #watch-status{position:absolute;left:0;right:0;bottom:0;padding:6px 12px;font-size:0.8rem;color:var(--muted);background:rgba(0,0,0,.65);pointer-events:none}
 #watch-status:empty{display:none}
@@ -119,6 +120,9 @@ function watchConnectChat(){
       if(d.type==='chat') watchAppend(`<div class="chat-msg"><span class="chat-user">${escH(d.user?.uniqueId||d.user?.nickname||'?')}</span>: <span class="chat-text">${escH(d.comment)}</span></div>`);
       else if(d.type==='gift') watchAppend(`<div class="chat-msg chat-gift">🎁 ${escH(d.user?.uniqueId||'?')} gift ${d.giftId} ×${d.repeatCount||1}</div>`);
       else if(d.type==='like') watchAppend(`<div class="chat-msg chat-like">❤️ ${escH(d.user?.uniqueId||'?')} +${d.likeCount||1}</div>`);
+      else if(d.type==='join'||d.type==='member') watchAppend(`<div class="chat-msg chat-join">👋 ${escH(d.user?.uniqueId||d.user?.nickname||'?')} joined</div>`);
+      else if(d.type==='follow') watchAppend(`<div class="chat-msg chat-follow">➕ ${escH(d.user?.uniqueId||d.user?.nickname||'?')} followed</div>`);
+      else if(d.type==='share') watchAppend(`<div class="chat-msg chat-share">🔁 ${escH(d.user?.uniqueId||d.user?.nickname||'?')} shared the live</div>`);
       else if(d.type==='connected') watchSetStatus('live ✓','live');
       else if(d.type==='status') watchSetStatus(d.message,'');
       else if(d.type==='error'){ watchSetStatus('error: '+(d.message||''),'err'); watchAppend(`<div class="chat-msg" style="color:var(--accent);font-size:0.75rem">${escH(d.message||'error')}</div>`); }

@@ -163,6 +163,40 @@ final class TikTokCodec
         });
         return $out;
     }
+    /**
+     * WebcastMemberMessage (join): user=2, memberCount=3, action=10
+     * (PirateTok live-py router: action==1 -> join).
+     */
+    public static function decodeMember(string $bytes): array {
+        $out=['memberCount'=>0,'action'=>0,'user'=>null];
+        (new TikTokProtoReader($bytes))->walk(function(int $f,int $w,TikTokProtoReader $r) use (&$out): bool {
+            switch($f){
+                case 2:$out['user']=self::decodeUser($r->readBytes());return true;
+                case 3:$out['memberCount']=$r->readVarint();return true;
+                case 10:$out['action']=$r->readVarint();return true;
+                default:return false;
+            }
+        });
+        return $out;
+    }
+    /**
+     * WebcastSocialMessage (follow/share): user=2, shareType=3, action=4,
+     * shareTarget=5 (jwdeveloper webcast.proto + PirateTok schema.py).
+     * PirateTok router: action==1 -> follow, 2<=action<=5 -> share.
+     */
+    public static function decodeSocial(string $bytes): array {
+        $out=['shareType'=>0,'action'=>0,'shareTarget'=>'','user'=>null];
+        (new TikTokProtoReader($bytes))->walk(function(int $f,int $w,TikTokProtoReader $r) use (&$out): bool {
+            switch($f){
+                case 2:$out['user']=self::decodeUser($r->readBytes());return true;
+                case 3:$out['shareType']=$r->readVarint();return true;
+                case 4:$out['action']=$r->readVarint();return true;
+                case 5:$out['shareTarget']=$r->readString();return true;
+                default:return false;
+            }
+        });
+        return $out;
+    }
     private static function decodeStringMapEntry(string $bytes): array {
         $k=$v='';
         (new TikTokProtoReader($bytes))->walk(function(int $f,int $w,TikTokProtoReader $r) use (&$k,&$v): bool {

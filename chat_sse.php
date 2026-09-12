@@ -324,7 +324,15 @@ while(!connection_aborted()){
             } elseif($type==='WebcastLikeMessage'){
                 try{ $l=TikTokCodec::decodeLike($pld); sse_send(['type'=>'like','likeCount'=>$l['likeCount'],'totalLikeCount'=>$l['totalLikeCount'],'user'=>$l['user']]); }catch(Throwable $e){}
             } elseif($type==='WebcastMemberMessage'){
-                sse_send(['type'=>'member','user'=>['uniqueId'=>'?'],'comment'=>'joined']);
+                try{ $m=TikTokCodec::decodeMember($pld); sse_send(['type'=>'join','user'=>$m['user'],'memberCount'=>$m['memberCount']]); }catch(Throwable $e){}
+            } elseif($type==='WebcastSocialMessage'){
+                try{
+                    $s=TikTokCodec::decodeSocial($pld);
+                    $a=(int)($s['action'] ?? 0);
+                    if($a===1) sse_send(['type'=>'follow','user'=>$s['user']]);
+                    elseif($a>=2 && $a<=5) sse_send(['type'=>'share','user'=>$s['user'],'shareTarget'=>$s['shareTarget'] ?? '']);
+                    else sse_send(['type'=>'social','user'=>$s['user'],'action'=>$a]);
+                }catch(Throwable $e){}
             } elseif($type==='WebcastRoomUserSeqMessage'){
                 // viewer count — forward as status
                 // skip noise, but count for debug
